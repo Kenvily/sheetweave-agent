@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>周报生成器</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
+</head>
+<body>
+  <main class="container">
+    <header>
+      <p class="eyebrow">WEEKLY REPORT</p>
+      <h1>研发周报生成器</h1>
+      <p class="description">上传 CSV，按固定规则整理编号、日期、称呼和 DOCX 排版。</p>
+    </header>
+
+    <section class="card">
+      {% if error %}
+      <div class="alert" role="alert">{{ error }}</div>
+      {% endif %}
+
+      <form action="{{ url_for('generate') }}" method="post" enctype="multipart/form-data">
+        <label class="field">
+          <span>周报 CSV <b>必填</b></span>
+          <input type="file" name="csv_file" accept=".csv,text/csv" required>
+          <small>UTF-8 编码，支持多行表头</small>
+        </label>
+
+        <div class="grid">
+          <label class="field">
+            <span>报告日期 <b>必填</b></span>
+            <input type="date" name="report_date" value="{{ form.get('report_date', today) }}" required>
+          </label>
+          <label class="field">
+            <span>指定周次 <i>可选</i></span>
+            <input type="text" name="week" value="{{ form.get('week', '') }}" placeholder="第1周">
+            <small>留空时选择最新有效周次</small>
+          </label>
+        </div>
+
+        <div class="grid">
+          <label class="field">
+            <span>起始章节号</span>
+            <input type="number" name="section_number" min="1" max="999" value="{{ form.get('section_number', default_section_number) }}" required>
+            <small>研发三部默认从 9 开始</small>
+          </label>
+          <label class="field">
+            <span>自定义模板 <i>可选</i></span>
+            <input type="file" name="template_file" accept=".docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document">
+            <small>留空使用项目内置模板</small>
+          </label>
+        </div>
+
+        <aside>
+          <strong>固定规则</strong>
+          <span>标题按 1. / 1.1 / 1.1.1，正文按 1、/（1）/①；全篇 1.5 倍行距。</span>
+        </aside>
+
+        <button type="submit">生成并下载 DOCX</button>
+      </form>
+    </section>
+  </main>
+</body>
+</html>

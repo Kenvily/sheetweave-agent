@@ -22,7 +22,19 @@ FONT_SETTINGS: dict[ParagraphKind, tuple[str, str, bool]] = {
     ParagraphKind.HEADING_1: ("Microsoft YaHei", "32", True),
     ParagraphKind.HEADING_2: ("Microsoft YaHei", "30", True),
     ParagraphKind.HEADING_3: ("Microsoft YaHei", "28", True),
-    ParagraphKind.BODY: ("SimSun", "21", False),
+    ParagraphKind.BODY_1: ("SimSun", "21", False),
+    ParagraphKind.BODY_2: ("SimSun", "21", False),
+    ParagraphKind.BODY_3: ("SimSun", "21", False),
+}
+BODY_KINDS = {
+    ParagraphKind.BODY_1,
+    ParagraphKind.BODY_2,
+    ParagraphKind.BODY_3,
+}
+HEADING_KINDS = {
+    ParagraphKind.HEADING_1,
+    ParagraphKind.HEADING_2,
+    ParagraphKind.HEADING_3,
 }
 
 
@@ -41,14 +53,10 @@ def _paragraph_element(paragraph: ReportParagraph) -> ET.Element:
     if paragraph.kind in {ParagraphKind.TITLE, ParagraphKind.DATE}:
         _property(properties, "jc", val="center")
     spacing = {"line": "360", "lineRule": "auto"}
-    if paragraph.kind in {
-        ParagraphKind.HEADING_1,
-        ParagraphKind.HEADING_2,
-        ParagraphKind.HEADING_3,
-    }:
+    if paragraph.kind in HEADING_KINDS:
         spacing.update(before="120", after="120")
     _property(properties, "spacing", **spacing)
-    if paragraph.kind is ParagraphKind.BODY:
+    if paragraph.kind in BODY_KINDS:
         _property(properties, "ind", firstLineChars="200")
 
     run = ET.SubElement(node, _qn("r"))
