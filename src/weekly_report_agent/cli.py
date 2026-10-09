@@ -19,7 +19,7 @@ def _iso_date(value: str) -> date:
 
 def build_parser() -> argparse.ArgumentParser:
     """Build the command-line argument parser."""
-    parser = argparse.ArgumentParser(description="从多行表头 CSV 生成研发三部周报 DOCX。")
+    parser = argparse.ArgumentParser(description="按确定性规则生成研发周报 DOCX。")
     parser.add_argument("--input", type=Path, default=Path("data/周报.csv"), help="输入 CSV")
     parser.add_argument(
         "--template",
@@ -32,6 +32,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--week", help="周次，例如“第1周”或“2026年9月第1周”")
     parser.add_argument("--report-date", type=_iso_date, default=date.today(), help="报告日期")
+    parser.add_argument(
+        "--section-number",
+        type=int,
+        default=9,
+        help="一级标题起始章节号，默认 9",
+    )
     return parser
 
 
@@ -46,9 +52,13 @@ def main(argv: Sequence[str] | None = None) -> int:
             output_path=args.output,
             report_date=args.report_date,
             requested_week=args.week,
+            section_number=args.section_number,
         )
     except (FileNotFoundError, ValueError) as exc:
         parser.error(str(exc))
     print(f"已生成：{args.output.resolve()}")
-    print(f"数据范围：{plan.source_label}，有效事项：{plan.item_count}")
+    print(
+        f"数据范围：{plan.source_label}，起始章节：{plan.section_number}，"
+        f"有效事项：{plan.item_count}"
+    )
     return 0

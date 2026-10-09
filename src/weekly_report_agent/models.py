@@ -51,7 +51,9 @@ class ParagraphKind(str, Enum):
     HEADING_1 = "heading_1"
     HEADING_2 = "heading_2"
     HEADING_3 = "heading_3"
-    BODY = "body"
+    BODY_1 = "body_1"
+    BODY_2 = "body_2"
+    BODY_3 = "body_3"
 
 
 @dataclass(frozen=True, slots=True)
@@ -68,5 +70,6 @@ class ReportPlan:
 
     report_date: date
     source_label: str
+    section_number: int
     item_count: int
     paragraphs: tuple[ReportParagraph, ...]

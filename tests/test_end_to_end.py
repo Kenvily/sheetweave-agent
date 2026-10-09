@@ -30,7 +30,7 @@ def test_cli_generates_report_from_repository_fixtures(tmp_path: Path) -> None:
     for expected in (
         "数据科学产品部周报",
         "20260924",
-        "9.1 BaaS数据评估",
+        "9.1. BaaS数据评估",
         "TabPFN",
         "LightGBM",
         "相关负责人",
