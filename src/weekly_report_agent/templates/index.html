@@ -8,23 +8,16 @@
 </head>
 <body>
   <main class="container{% if prepared %} container-wide{% endif %}">
-    <header>
-      <p class="eyebrow">WEEKLY REPORT</p>
-      <h1>研发周报生成器</h1>
-      <p class="description">上传 CSV 或 XLSX，确认规则和字段后，按确定性规则生成 DOCX。</p>
-    </header>
+    <header><h1>研发周报生成器</h1></header>
 
     <section class="card">
-      {% if error %}
-      <div class="alert" role="alert">{{ error }}</div>
-      {% endif %}
+      {% if error %}<div class="alert" role="alert">{{ error }}</div>{% endif %}
 
       <form action="{{ url_for('generate') }}" method="post" enctype="multipart/form-data">
         <div class="grid">
           <label class="field">
-            <span>周报 CSV / XLSX <b>必填</b></span>
+            <span>周报文件</span>
             <input type="file" name="csv_file" accept=".csv,.xlsx,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" required>
-            <small>CSV 使用 UTF-8；XLSX 可指定工作表</small>
           </label>
           <label class="field">
             <span>周报规则</span>
@@ -33,57 +26,82 @@
               <option value="{{ preset.id }}"{% if form.get('preset', 'rd3') == preset.id %} selected{% endif %}>{{ preset.name }}</option>
               {% endfor %}
             </select>
-            <small>研发三部兼容旧格式；通用周报使用单行表头</small>
           </label>
         </div>
 
         <div class="grid grid-three">
           <label class="field">
-            <span>报告日期 <b>必填</b></span>
+            <span>报告日期</span>
             <input type="date" name="report_date" value="{{ form.get('report_date', today) }}" required>
           </label>
           <label class="field">
-            <span>指定周次 <i>研发三部可选</i></span>
+            <span>指定周次（可选）</span>
             <input type="text" name="week" value="{{ form.get('week', '') }}" placeholder="第1周">
           </label>
           <label class="field">
-            <span>XLSX 工作表 <i>可选</i></span>
-            <input type="text" name="sheet" value="{{ form.get('sheet', '') }}" placeholder="默认第一个 Sheet">
+            <span>XLSX 工作表（可选）</span>
+            <input type="text" name="sheet" value="{{ form.get('sheet', '') }}" placeholder="默认第一个工作表">
           </label>
         </div>
 
         <div class="grid">
           <label class="field">
-            <span>起始章节号 <i>可选</i></span>
-            <input type="number" name="section_number" min="1" max="999" value="{{ form.get('section_number', '') }}" placeholder="按规则默认值">
-            <small>研发三部默认 9，通用周报默认 1</small>
+            <span>内容处理</span>
+            <select name="content_mode" required>
+              {% for value, label in content_modes %}
+              <option value="{{ value }}"{% if selected_mode == value %} selected{% endif %}>{{ label }}</option>
+              {% endfor %}
+            </select>
           </label>
           <label class="field">
-            <span>自定义模板 <i>可选</i></span>
-            <input type="file" name="template_file" accept=".docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document">
-            <small>留空使用项目内置模板</small>
+            <span>模型</span>
+            <select name="model">
+              {% for model in models %}
+              <option value="{{ model }}"{% if form.get('model', default_model) == model %} selected{% endif %}>{{ model }}</option>
+              {% endfor %}
+            </select>
           </label>
         </div>
 
+        <label class="field">
+          <span>自定义要求（仅自定义模式使用）</span>
+          <textarea name="custom_instruction" rows="3" placeholder="例如：按成果、问题和后续动作整理，不改变任何事实。">{{ form.get('custom_instruction', '') }}</textarea>
+        </label>
+
+        <section class="data-notice" aria-label="模型数据说明">
+          <strong>数据处理说明</strong>
+          <p>原文保留不会调用模型。其他模式会将内容块、所属章节和项目名称发送到服务器配置的 DeepSeek 服务；不会发送完整上传文件或 API Key。</p>
+          <p class="service-state">模型服务：{% if llm_available %}已配置{% else %}未配置，仅原文保留可直接使用{% endif %}</p>
+          <label class="consent">
+            <input type="checkbox" name="allow_external" value="yes"{% if form.get('allow_external') == 'yes' %} checked{% endif %}>
+            <span>选择模型模式时，我确认允许发送上述内容</span>
+          </label>
+        </section>
+
         <details>
-          <summary>手动字段映射（自动识别失败时填写）</summary>
+          <summary>高级设置</summary>
+          <div class="advanced-grid">
+            <label class="field">
+              <span>起始章节号（可选）</span>
+              <input type="number" name="section_number" min="1" max="999" value="{{ form.get('section_number', '') }}" placeholder="按规则默认值">
+            </label>
+            <label class="field">
+              <span>自定义模板（可选）</span>
+              <input type="file" name="template_file" accept=".docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document">
+            </label>
+          </div>
           <div class="mapping-grid">
             {% for key, label in [('project', '项目'), ('detail', '具体内容'), ('status', '状态'), ('content', '本周工作'), ('issues', '问题与风险'), ('next_plan', '下周计划')] %}
             <label class="field compact">
-              <span>{{ label }}</span>
-              <input type="text" name="field_{{ key }}" value="{{ form.get('field_' ~ key, '') }}" placeholder="源文件列名">
+              <span>{{ label }}列</span>
+              <input type="text" name="field_{{ key }}" value="{{ form.get('field_' ~ key, '') }}" placeholder="自动识别">
             </label>
             {% endfor %}
           </div>
         </details>
 
-        <aside>
-          <strong>确定性规则</strong>
-          <span>原文模式不调用 LLM；标题按 1. / 1.1 / 1.1.1，正文按 1、/（1）/①；全篇 1.5 倍行距。</span>
-        </aside>
-
         <div class="actions">
-          <button class="secondary" type="submit" formaction="{{ url_for('preview') }}">预览来源与结构</button>
+          <button class="secondary" type="submit" formaction="{{ url_for('preview') }}">预览来源与内容</button>
           <button type="submit">生成并下载 DOCX</button>
         </div>
       </form>
@@ -93,12 +111,12 @@
     <section class="preview-stack" aria-label="输入预览">
       <article class="card preview-card">
         <div class="section-head">
-          <div><p class="eyebrow">SOURCE</p><h2>来源表格</h2></div>
+          <h2>来源表格</h2>
           <span class="badge">{{ selected_preset.name }}</span>
         </div>
         <p class="meta">
-          文件 {{ prepared.source.source_files[0].filename }}；有效行 {{ prepared.source.sources|length }}；
-          {% if prepared.source.available_sheets %}工作表 {{ prepared.source.source_files[0].sheet }}（可选：{{ prepared.source.available_sheets|join('、') }}）{% else %}CSV 物理行号已保留{% endif %}
+          {{ prepared.source.source_files[0].filename }} · {{ prepared.source.sources|length }} 行
+          {% if prepared.source.available_sheets %} · {{ prepared.source.source_files[0].sheet }}{% endif %}
         </p>
         <p class="meta">字段映射：{% for key, value in prepared.source.field_mapping.items() %}<code>{{ key }} ← {{ value }}</code>{% if not loop.last %}　{% endif %}{% endfor %}</p>
         {% if prepared.source.warnings %}
@@ -106,9 +124,7 @@
         {% endif %}
         <div class="table-wrap">
           <table>
-            <thead>
-              <tr><th>位置</th><th>来源 ID</th>{% for header in prepared.source.headers %}<th>{{ header }}</th>{% endfor %}</tr>
-            </thead>
+            <thead><tr><th>位置</th><th>来源 ID</th>{% for header in prepared.source.headers %}<th>{{ header }}</th>{% endfor %}</tr></thead>
             <tbody>
               {% for source in prepared.source.sources %}
               <tr id="source-{{ source.source_id|replace(':', '-') }}">
@@ -124,17 +140,25 @@
       </article>
 
       <article class="card preview-card">
-        <div class="section-head"><div><p class="eyebrow">BLOCKS</p><h2>内容结构与来源映射</h2></div><span class="badge">原文模式 · 零 LLM</span></div>
+        <div class="section-head">
+          <h2>内容结构与来源映射</h2>
+          <span class="badge">{% if selected_mode == 'original' %}原文模式 · 零 LLM{% else %}{{ mode_labels.get(selected_mode, selected_mode) }}{% endif %}</span>
+        </div>
         <div class="blocks">
           {% for block in prepared.blocks %}
           <section class="block">
-            <div><strong>{{ block.section_title }} / {{ block.group_key }}</strong><code>{{ block.block_id }}</code></div>
-            <p>{{ block.effective_text }}</p>
-            <small>来源：{{ block.source_ids|join('、') }}</small>
+            <div class="block-head"><strong>{{ block.section_title }} / {{ block.group_key }}</strong><code>{{ block.block_id }}</code></div>
+            {% if block.generated_text %}
+            <div class="text-version"><b>原文</b><p>{{ block.original_text }}</p></div>
+            <div class="text-version result"><b>模型结果</b><p>{{ block.generated_text }}</p></div>
+            {% else %}
+            <div class="text-version result"><b>原文</b><p>{{ block.original_text }}</p></div>
+            {% endif %}
+            <p class="source-links">来源：{{ block.source_ids|join('、') }}</p>
           </section>
           {% endfor %}
         </div>
-        <p class="preview-note">预览不保存上传文件。生成 DOCX 时请重新选择同一文件；跨请求审核会话将在 M3 实现。</p>
+        <div class="data-notice compact-notice">预览与下载是两个独立请求；在 M3 审核会话完成前，模型模式下载时会重新生成内容。</div>
       </article>
     </section>
     {% endif %}

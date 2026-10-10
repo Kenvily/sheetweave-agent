@@ -7,6 +7,7 @@ from collections.abc import Sequence
 from datetime import date
 from pathlib import Path
 
+from .llm import ContentMode
 from .service import generate_report
 
 
@@ -19,8 +20,8 @@ def _iso_date(value: str) -> date:
 
 def build_parser() -> argparse.ArgumentParser:
     """Build the command-line argument parser."""
-    parser = argparse.ArgumentParser(description="按确定性规则生成研发周报 DOCX。")
-    parser.add_argument("--input", type=Path, default=Path("data/周报.csv"), help="输入 CSV")
+    parser = argparse.ArgumentParser(description="生成研发周报 DOCX。")
+    parser.add_argument("--input", type=Path, default=Path("data/周报.csv"), help="输入 CSV/XLSX")
     parser.add_argument(
         "--template",
         type=Path,
@@ -40,6 +41,19 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="一级标题起始章节号；留空使用所选预设默认值",
     )
+    parser.add_argument(
+        "--content-mode",
+        choices=tuple(mode.value for mode in ContentMode),
+        default=ContentMode.ORIGINAL.value,
+        help="内容模式；除 original 外会调用服务端配置的模型",
+    )
+    parser.add_argument("--model", help="模型名称，必须在服务端允许列表中")
+    parser.add_argument("--custom-instruction", help="custom 模式的补充要求")
+    parser.add_argument(
+        "--allow-external",
+        action="store_true",
+        help="确认允许将内容块发送到服务端配置的模型；非 original 模式必填",
+    )
     return parser
 
 
@@ -48,6 +62,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
     try:
+        if args.content_mode != ContentMode.ORIGINAL.value and not args.allow_external:
+            parser.error("非原文模式必须使用 --allow-external 确认允许发送内容块。")
         plan = generate_report(
             input_path=args.input,
             template_path=args.template,
@@ -57,8 +73,11 @@ def main(argv: Sequence[str] | None = None) -> int:
             section_number=args.section_number,
             preset_id=args.preset,
             sheet=args.sheet,
+            content_mode=args.content_mode,
+            custom_instruction=args.custom_instruction,
+            model=args.model,
         )
-    except (FileNotFoundError, ValueError) as exc:
+    except (FileNotFoundError, OSError, ValueError, RuntimeError) as exc:
         parser.error(str(exc))
     print(f"已生成：{args.output.resolve()}")
     print(
