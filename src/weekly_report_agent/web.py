@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import difflib
 import io
 import os
 import tempfile
@@ -30,8 +31,15 @@ from .llm import (
 from .llm.config import DEFAULT_MODEL, DEFAULT_MODELS
 from .planner import validate_section_number
 from .rules import RulePreset, list_rule_presets, load_rule_preset
-from .service import generate_report, prepare_report, process_report, render_prepared_report
-from .web_sessions import SnapshotStore
+from .service import (
+    edit_report_block,
+    generate_report,
+    prepare_report,
+    process_report,
+    render_prepared_report,
+    select_block_version,
+)
+from .web_sessions import ReportSession, SessionConflictError, SnapshotStore
 
 DEFAULT_TEMPLATE = Path("data/研发三部周报模板.docx")
 DOCX_MIME_TYPE = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
@@ -86,6 +94,33 @@ def _selected_mode() -> ContentMode:
 def _require_external_consent(mode: ContentMode) -> None:
     if mode is not ContentMode.ORIGINAL and request.form.get("allow_external") != "yes":
         raise ValueError("使用模型处理前，请确认允许将内容块发送到已配置的 DeepSeek 服务。")
+
+
+def _parse_revision(value: str) -> int:
+    try:
+        revision = int(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("报告版本号无效，请刷新页面后重试。") from exc
+    if revision < 1:
+        raise ValueError("报告版本号无效，请刷新页面后重试。")
+    return revision
+
+
+def _diff_segments(before: str, after: str) -> tuple[tuple[str, str], ...]:
+    """Return an escaped-by-Jinja character diff without changing either text."""
+    segments: list[tuple[str, str]] = []
+    matcher = difflib.SequenceMatcher(a=before, b=after, autojunk=False)
+    for operation, left_start, left_end, right_start, right_end in matcher.get_opcodes():
+        if operation == "equal":
+            segments.append(("equal", before[left_start:left_end]))
+        elif operation == "delete":
+            segments.append(("delete", before[left_start:left_end]))
+        elif operation == "insert":
+            segments.append(("insert", after[right_start:right_end]))
+        else:
+            segments.append(("delete", before[left_start:left_end]))
+            segments.append(("insert", after[right_start:right_end]))
+    return tuple(segment for segment in segments if segment[1])
 
 
 def create_app(
@@ -152,6 +187,87 @@ def create_app(
             ),
             status,
         )
+
+    def show_workspace(
+        session: ReportSession,
+        *,
+        error: str | None = None,
+        notice: str | None = None,
+        status: int = 200,
+    ):
+        models, default_model, llm_available = llm_page_settings()
+        preset = load_rule_preset(session.preset_id)
+        notices = {
+            "edited": "人工编辑已保存，文档预览与下载文件已同步更新。",
+            "selected": "有效内容版本已更新，文档预览与下载文件已同步更新。",
+            "regenerated": "所选内容块已重新生成，其他内容未改变。",
+        }
+        return (
+            render_template(
+                "workspace.html",
+                session=session,
+                prepared=session.prepared,
+                preset=preset,
+                error=error,
+                notice=notices.get(notice, notice),
+                diff_segments=_diff_segments,
+                content_modes=tuple(
+                    (mode.value, MODE_OPTION_LABELS[mode])
+                    for mode in ContentMode
+                    if mode is not ContentMode.ORIGINAL
+                ),
+                models=models,
+                default_model=default_model,
+                llm_available=llm_available,
+            ),
+            status,
+        )
+
+    def render_session_revision(
+        session: ReportSession,
+        prepared,
+        *,
+        content_mode: str | None = None,
+        custom_instruction: str | None = None,
+        model: str | None = None,
+    ) -> ReportSession:
+        preset = load_rule_preset(session.preset_id)
+        with tempfile.TemporaryDirectory(prefix="weekly-report-revision-") as directory:
+            output_path = Path(directory) / "report.docx"
+            render_prepared_report(
+                prepared,
+                preset,
+                session.template_path,
+                output_path,
+                session.report_date,
+                session.section_number,
+            )
+            return app.config["SNAPSHOT_STORE"].update_session(
+                session.token,
+                session.revision,
+                prepared,
+                output_path.read_bytes(),
+                content_mode=content_mode,
+                custom_instruction=custom_instruction,
+                model=model,
+            )
+
+    def mutation_error(token: str, error: Exception, status: int):
+        try:
+            current = app.config["SNAPSHOT_STORE"].load_session(token)
+        except ValueError:
+            return show_form(error=str(error), status=status)
+        return show_workspace(current, error=str(error), status=status)
+
+    def current_session(token: str) -> ReportSession:
+        session = app.config["SNAPSHOT_STORE"].load_session(token)
+        expected = _parse_revision(request.form.get("revision", ""))
+        if expected != session.revision:
+            raise SessionConflictError(
+                f"报告已在其他页面更新（当前版本 {session.revision}），"
+                "请刷新后重新操作，当前修改未覆盖新版本。"
+            )
+        return session
 
     def save_input(upload: FileStorage, workdir: Path) -> Path:
         if not upload.filename:
@@ -240,23 +356,29 @@ def create_app(
                     llm_service=app.config.get("LLM_SERVICE"),
                 )
                 output_path = workdir / "report.docx"
+                template = selected_template(workdir)
                 render_prepared_report(
                     prepared,
                     preset,
-                    selected_template(workdir),
+                    template,
                     output_path,
                     report_date,
                     section_number,
                 )
                 filename = f"{preset.name}-{report_date:%Y%m%d}.docx"
-                snapshot_token = app.config["SNAPSHOT_STORE"].create(
-                    output_path.read_bytes(), filename
+                snapshot_token = app.config["SNAPSHOT_STORE"].create_session(
+                    prepared,
+                    preset_id=preset.id,
+                    report_date=report_date,
+                    section_number=section_number,
+                    content_mode=mode.value,
+                    custom_instruction=instruction,
+                    model=model,
+                    template_content=template.read_bytes(),
+                    report_content=output_path.read_bytes(),
+                    download_name=filename,
                 )
-            return show_form(
-                prepared=prepared,
-                selected_preset=preset,
-                snapshot_token=snapshot_token,
-            )
+            return show_workspace(app.config["SNAPSHOT_STORE"].load_session(snapshot_token))
         except (
             FileNotFoundError,
             OSError,
@@ -266,6 +388,87 @@ def create_app(
             ET.ParseError,
         ) as exc:
             return show_form(error=str(exc), status=400)
+
+    @app.get("/workspace/<token>")
+    def workspace(token: str):
+        try:
+            session = app.config["SNAPSHOT_STORE"].load_session(token)
+            return show_workspace(session, notice=request.args.get("updated"))
+        except ValueError as exc:
+            return show_form(error=str(exc), status=404)
+
+    @app.post("/workspace/<token>/blocks/<block_id>/edit")
+    def edit_workspace_block(token: str, block_id: str):
+        try:
+            session = current_session(token)
+            prepared = edit_report_block(
+                session.prepared, block_id, request.form.get("edited_text", "")
+            )
+            render_session_revision(session, prepared)
+            return redirect(
+                f"{url_for('workspace', token=token, updated='edited')}#block-{block_id}"
+            )
+        except SessionConflictError as exc:
+            return mutation_error(token, exc, 409)
+        except (KeyError, OSError, ValueError, zipfile.BadZipFile, ET.ParseError) as exc:
+            return mutation_error(token, exc, 400)
+
+    @app.post("/workspace/<token>/blocks/<block_id>/select")
+    def select_workspace_block(token: str, block_id: str):
+        try:
+            session = current_session(token)
+            prepared = select_block_version(
+                session.prepared, block_id, request.form.get("version", "")
+            )
+            render_session_revision(session, prepared)
+            return redirect(
+                f"{url_for('workspace', token=token, updated='selected')}#block-{block_id}"
+            )
+        except SessionConflictError as exc:
+            return mutation_error(token, exc, 409)
+        except (KeyError, OSError, ValueError, zipfile.BadZipFile, ET.ParseError) as exc:
+            return mutation_error(token, exc, 400)
+
+    @app.post("/workspace/<token>/blocks/<block_id>/regenerate")
+    def regenerate_workspace_block(token: str, block_id: str):
+        try:
+            session = current_session(token)
+            mode = parse_content_mode(request.form.get("content_mode", session.content_mode))
+            if mode is ContentMode.ORIGINAL:
+                raise ValueError("单条重新生成必须选择一种模型处理模式。")
+            _require_external_consent(mode)
+            instruction = request.form.get("custom_instruction", "").strip() or None
+            model = request.form.get("model", "").strip() or session.model
+            service = app.config.get("LLM_SERVICE") or LLMService(load_llm_config())
+            prepared = service.regenerate_block(
+                session.prepared,
+                block_id,
+                mode,
+                custom_instruction=instruction,
+                model=model,
+                overwrite_edited=request.form.get("overwrite_edited") == "yes",
+            )
+            render_session_revision(
+                session,
+                prepared,
+                content_mode=mode.value,
+                custom_instruction=instruction,
+                model=model,
+            )
+            return redirect(
+                f"{url_for('workspace', token=token, updated='regenerated')}#block-{block_id}"
+            )
+        except SessionConflictError as exc:
+            return mutation_error(token, exc, 409)
+        except (
+            KeyError,
+            LLMClientError,
+            OSError,
+            ValueError,
+            zipfile.BadZipFile,
+            ET.ParseError,
+        ) as exc:
+            return mutation_error(token, exc, 400)
 
     @app.get("/download/<token>")
     def download_snapshot(token: str):

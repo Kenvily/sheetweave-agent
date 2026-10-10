@@ -8,7 +8,10 @@
 </head>
 <body>
   <main class="container{% if prepared %} container-wide{% endif %}">
-    <header><h1>研发周报生成器</h1></header>
+    <header class="app-header">
+      <span class="app-mark" aria-hidden="true">W</span>
+      <h1>研发周报生成器</h1>
+    </header>
 
     <section class="card">
       {% if error %}<div class="alert" role="alert">{{ error }}</div>{% endif %}

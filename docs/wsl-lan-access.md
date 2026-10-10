@@ -20,7 +20,7 @@ python -m weekly_report_agent.web --host 0.0.0.0 --port 18989
 保持该终端运行。本机检查：
 
 ```bash
-curl -I http://127.0.0.1:18989/
+curl -I http://127.0.0.1:18989
 ```
 
 ## 2. 首次配置或 WSL 重启后重建
@@ -30,7 +30,7 @@ curl -I http://127.0.0.1:18989/
 ```powershell
 $Port = 18989
 $WindowsIp = "172.16.186.179"  # 当前 WLAN IPv4；切换网络后需修改
-$LanSubnet = "172.16.186.0/24" # 当前 WLAN 网段；切换网络后需修改
+$LanSubnet = "172.16.180.0/21" # 当前 WLAN 网段；切换网络后需修改
 $RuleName = "Weekly Report Web 18989"
 $WslIp = ((wsl.exe hostname -I).Trim() -split '\s+')[0]
 
@@ -69,8 +69,6 @@ netsh interface portproxy show v4tov4
 ```text
 http://172.16.186.179:18989/
 ```
-
-如果 Windows 本机能访问而其他机器不能访问，通常是公司 WLAN 终端隔离、VPN 或企业防火墙策略导致。
 
 ## 4. 清理转发规则
 

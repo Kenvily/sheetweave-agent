@@ -1,0 +1,233 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>周报审核工作区</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
+</head>
+<body>
+  <main class="workspace-container">
+    <header class="workspace-header">
+      <div>
+        <a class="back-link" href="{{ url_for('index') }}">← 新建周报</a>
+        <h1>周报审核工作区</h1>
+        <div class="workspace-meta" aria-label="当前报告信息">
+          <span>{{ preset.name }}</span>
+          <span>{{ session.report_date }}</span>
+          <span>版本 {{ session.revision }}</span>
+          {% if session.content_mode == 'original' %}<span>原文模式</span>{% endif %}
+        </div>
+      </div>
+      <a class="button-link" href="{{ url_for('download_snapshot', token=session.token) }}">下载当前 DOCX</a>
+    </header>
+
+    {% if error %}<div class="alert workspace-alert" role="alert">{{ error }}</div>{% endif %}
+    {% if notice %}<div class="success-notice workspace-alert" role="status">{{ notice }}</div>{% endif %}
+
+    <section class="review-grid" aria-label="三栏周报审核工作区">
+      <aside class="review-panel source-panel" aria-label="原始表格">
+        <div class="panel-heading">
+          <h2>来源表格 / 原始表格</h2>
+          <span class="badge">{{ prepared.source.sources|length }} 行参与生成</span>
+        </div>
+        {% if prepared.source.warnings %}
+        <ul class="warnings">{% for warning in prepared.source.warnings %}<li>{{ warning }}</li>{% endfor %}</ul>
+        {% endif %}
+        <div class="source-list">
+          {% for source in prepared.source.sources %}
+          <article class="source-row trace-target" tabindex="0" data-source-id="{{ source.source_id }}" data-block-ids="{% for block in prepared.blocks_for_source(source.source_id) %}{{ block.block_id }}{% if not loop.last %} {% endif %}{% endfor %}">
+            <div class="trace-heading">
+              <strong>{% if source.sheet %}{{ source.sheet }}!{% endif %}{{ source.row_number }}</strong>
+              <code>{{ source.source_id }}</code>
+            </div>
+            {% if source.historical_completed %}<span class="status-tag">已完成 · 跳过 LLM</span>{% endif %}
+            <dl class="source-fields">
+              {% for header in prepared.source.headers %}
+                {% set value = source.raw_values[loop.index0] if loop.index0 < source.raw_values|length else '' %}
+                {% if value %}<div><dt>{{ header }}</dt><dd>{{ value }}</dd></div>{% endif %}
+              {% endfor %}
+            </dl>
+          </article>
+          {% endfor %}
+        </div>
+      </aside>
+
+      <section class="review-panel content-panel" aria-label="内容审核">
+        <div class="panel-heading">
+          <div><h2>内容审核</h2><span class="visually-hidden">内容结构与来源映射</span></div>
+          <span class="badge">{{ prepared.blocks|length }} 块</span>
+        </div>
+        <div class="blocks review-blocks">
+          {% for block in prepared.blocks %}
+          <article id="block-{{ block.block_id }}" class="block review-block trace-target" tabindex="0" data-block-id="{{ block.block_id }}" data-source-ids="{{ block.source_ids|join(' ') }}">
+            <div class="block-head">
+              <div><strong>{{ block.section_title }} / {{ block.group_key }}</strong><code>{{ block.block_id }}</code></div>
+              <span class="effective-badge"><span>当前</span><strong>{% if block.effective_version == 'generated' %}模型候选{% elif block.effective_version == 'edited' %}人工编辑{% else %}原文{% endif %}</strong></span>
+            </div>
+            <p class="source-links">来源：{{ block.source_ids|join('、') }}</p>
+
+            <div class="version-card{% if block.effective_version == 'original' %} selected{% endif %}">
+              <div class="version-heading"><b>原文</b>{% if block.effective_version == 'original' %}<span>用于导出</span>{% endif %}</div>
+              <p>{{ block.original_text }}</p>
+              {% if block.effective_version != 'original' %}
+              <form class="inline-action" method="post" action="{{ url_for('select_workspace_block', token=session.token, block_id=block.block_id) }}">
+                <input type="hidden" name="revision" value="{{ session.revision }}">
+                <input type="hidden" name="version" value="original">
+                <button class="small secondary" type="submit">采用原文</button>
+              </form>
+              {% endif %}
+            </div>
+
+            {% if block.generated_text %}
+            <div class="validation-summary validation-{{ block.validation_level }}">
+              <strong>{% if block.validation_level == 'pass' %}事实校验通过{% elif block.validation_level == 'review' %}待人工确认{% else %}严重冲突{% endif %}</strong>
+              <span>{% if block.validation_level == 'conflict' %}不可直接采用，本次 DOCX 已自动使用原文{% elif block.effective_version == 'generated' %}已用于导出{% else %}当前未采用{% endif %}</span>
+            </div>
+            <div class="version-card{% if block.effective_version == 'generated' %} selected{% endif %}">
+              <div class="version-heading"><b>模型结果（候选）</b>{% if block.effective_version == 'generated' %}<span>用于导出</span>{% endif %}</div>
+              <p>{{ block.generated_text }}</p>
+              {% if block.validation_level != 'conflict' and block.effective_version != 'generated' %}
+              <form class="inline-action" method="post" action="{{ url_for('select_workspace_block', token=session.token, block_id=block.block_id) }}">
+                <input type="hidden" name="revision" value="{{ session.revision }}">
+                <input type="hidden" name="version" value="generated">
+                <button class="small" type="submit">采用模型候选</button>
+              </form>
+              {% endif %}
+            </div>
+            <details class="diff-view">
+              <summary>查看原文与模型候选 Diff</summary>
+              <div class="diff-text">{% for kind, text in diff_segments(block.original_text, block.generated_text) %}{% if kind == 'insert' %}<ins>{{ text }}</ins>{% elif kind == 'delete' %}<del>{{ text }}</del>{% else %}<span>{{ text }}</span>{% endif %}{% endfor %}</div>
+            </details>
+            {% if block.validation_warnings %}<ul class="validation-issues">{% for warning in block.validation_warnings %}<li>{{ warning }}</li>{% endfor %}</ul>{% endif %}
+            {% endif %}
+
+            {% if block.edited_text %}
+            <div class="validation-summary validation-{{ block.edited_validation_level or 'review' }}">
+              <strong>人工编辑：{% if block.edited_validation_level == 'pass' %}校验通过{% elif block.edited_validation_level == 'review' %}待人工确认{% else %}严重冲突{% endif %}</strong>
+              <span>{% if block.edited_validation_level == 'conflict' %}不可采用{% elif block.effective_version == 'edited' %}已用于导出{% else %}当前未采用{% endif %}</span>
+            </div>
+            <div class="version-card{% if block.effective_version == 'edited' %} selected{% endif %}">
+              <div class="version-heading"><b>人工编辑</b>{% if block.effective_version == 'edited' %}<span>用于导出</span>{% endif %}</div>
+              <p>{{ block.edited_text }}</p>
+              {% if block.edited_validation_level != 'conflict' and block.effective_version != 'edited' %}
+              <form class="inline-action" method="post" action="{{ url_for('select_workspace_block', token=session.token, block_id=block.block_id) }}">
+                <input type="hidden" name="revision" value="{{ session.revision }}">
+                <input type="hidden" name="version" value="edited">
+                <button class="small" type="submit">采用人工编辑</button>
+              </form>
+              {% endif %}
+            </div>
+            <details class="diff-view">
+              <summary>查看模型/原文与人工编辑 Diff</summary>
+              <div class="diff-text">{% set edit_base = block.generated_text or block.original_text %}{% for kind, text in diff_segments(edit_base, block.edited_text) %}{% if kind == 'insert' %}<ins>{{ text }}</ins>{% elif kind == 'delete' %}<del>{{ text }}</del>{% else %}<span>{{ text }}</span>{% endif %}{% endfor %}</div>
+            </details>
+            {% if block.edited_validation_warnings %}<ul class="validation-issues">{% for warning in block.edited_validation_warnings %}<li>{{ warning }}</li>{% endfor %}</ul>{% endif %}
+            {% endif %}
+
+            <details class="editor" open>
+              <summary>人工编辑</summary>
+              <form method="post" action="{{ url_for('edit_workspace_block', token=session.token, block_id=block.block_id) }}">
+                <input type="hidden" name="revision" value="{{ session.revision }}">
+                <textarea name="edited_text" rows="5" required>{{ block.edited_text or block.effective_text }}</textarea>
+                <button class="small" type="submit">保存并校验</button>
+              </form>
+            </details>
+
+            {% if block.llm_editable %}
+            <details class="regenerator">
+              <summary>单条重新生成</summary>
+              <form method="post" action="{{ url_for('regenerate_workspace_block', token=session.token, block_id=block.block_id) }}">
+                <input type="hidden" name="revision" value="{{ session.revision }}">
+                <label class="field compact"><span>处理模式</span><select name="content_mode">{% for value, label in content_modes %}<option value="{{ value }}"{% if session.content_mode == value %} selected{% endif %}>{{ label }}</option>{% endfor %}</select></label>
+                <label class="field compact"><span>模型</span><select name="model">{% for model in models %}<option value="{{ model }}"{% if session.model == model %} selected{% endif %}>{{ model }}</option>{% endfor %}</select></label>
+                <label class="field compact"><span>自定义要求</span><textarea name="custom_instruction" rows="2">{{ session.custom_instruction or '' }}</textarea></label>
+                {% if block.edited_text %}<label class="consent"><input type="checkbox" name="overwrite_edited" value="yes"><span>确认覆盖该块的人工编辑</span></label>{% endif %}
+                <label class="consent"><input type="checkbox" name="allow_external" value="yes" required><span>确认仅将该内容块发送到模型</span></label>
+                <button class="small" type="submit">重新生成此块</button>
+              </form>
+            </details>
+            {% endif %}
+          </article>
+          {% endfor %}
+        </div>
+      </section>
+
+      <aside class="review-panel document-panel" aria-label="文档效果">
+        <div class="panel-heading">
+          <h2>文档效果</h2>
+          <span class="badge">HTML 快速预览</span>
+        </div>
+        <article class="paper-preview">
+          <h2>{{ preset.document.report_title }}</h2>
+          <p class="preview-date">{{ session.report_date.strftime('%Y%m%d') }}</p>
+          {% for section in preset.sections %}
+            {% set section_blocks = prepared.blocks|selectattr('section_id', 'equalto', section.id)|list %}
+            {% if section_blocks %}
+            <section class="preview-section">
+              <h3>{{ section.title }}</h3>
+              {% for block in section_blocks %}
+              <div class="preview-entry" data-preview-block="{{ block.block_id }}">
+                <h4>{{ block.group_key }}</h4>
+                <p>{{ block.effective_text }}</p>
+              </div>
+              {% endfor %}
+            </section>
+            {% endif %}
+          {% endfor %}
+        </article>
+        <div class="snapshot-actions workspace-download">
+          <a class="button-link" href="{{ url_for('download_snapshot', token=session.token) }}">下载版本 {{ session.revision }} DOCX</a>
+        </div>
+      </aside>
+    </section>
+  </main>
+
+  <div id="processing-overlay" class="processing-overlay" role="status" aria-live="polite" aria-hidden="true">
+    <div class="processing-panel"><span class="spinner" aria-hidden="true"></span><strong>正在更新当前周报</strong><p>保存后会生成新的文档版本，请稍候。</p></div>
+  </div>
+  <script>
+    (() => {
+      const sourceRows = [...document.querySelectorAll("[data-source-id]")];
+      const blocks = [...document.querySelectorAll("[data-block-id]")];
+      const previews = [...document.querySelectorAll("[data-preview-block]")];
+      const clear = () => [...sourceRows, ...blocks, ...previews].forEach((item) => item.classList.remove("trace-active"));
+      const activateSource = (row) => {
+        clear();
+        row.classList.add("trace-active");
+        const ids = row.dataset.blockIds.split(" ").filter(Boolean);
+        ids.forEach((id) => {
+          document.querySelector(`[data-block-id="${CSS.escape(id)}"]`)?.classList.add("trace-active");
+          document.querySelector(`[data-preview-block="${CSS.escape(id)}"]`)?.classList.add("trace-active");
+        });
+        if (ids.length) document.querySelector(`[data-block-id="${CSS.escape(ids[0])}"]`)?.scrollIntoView({behavior: "smooth", block: "center"});
+      };
+      const activateBlock = (block) => {
+        clear();
+        block.classList.add("trace-active");
+        document.querySelector(`[data-preview-block="${CSS.escape(block.dataset.blockId)}"]`)?.classList.add("trace-active");
+        const ids = block.dataset.sourceIds.split(" ").filter(Boolean);
+        ids.forEach((id) => document.querySelector(`[data-source-id="${CSS.escape(id)}"]`)?.classList.add("trace-active"));
+        if (ids.length) document.querySelector(`[data-source-id="${CSS.escape(ids[0])}"]`)?.scrollIntoView({behavior: "smooth", block: "center"});
+      };
+      sourceRows.forEach((row) => {
+        row.addEventListener("click", () => activateSource(row));
+        row.addEventListener("keydown", (event) => { if (event.key === "Enter" || event.key === " ") activateSource(row); });
+      });
+      blocks.forEach((block) => {
+        block.addEventListener("click", (event) => { if (!event.target.closest("form, details, button, input, textarea, select, a")) activateBlock(block); });
+        block.addEventListener("keydown", (event) => { if ((event.key === "Enter" || event.key === " ") && event.target === block) activateBlock(block); });
+      });
+      const overlay = document.getElementById("processing-overlay");
+      document.querySelectorAll(".content-panel form").forEach((form) => form.addEventListener("submit", () => {
+        overlay.classList.add("visible");
+        overlay.setAttribute("aria-hidden", "false");
+      }));
+      window.addEventListener("pageshow", () => {
+        overlay.classList.remove("visible");
+        overlay.setAttribute("aria-hidden", "true");
+      });
+    })();
+  </script>
+</body>
+</html>

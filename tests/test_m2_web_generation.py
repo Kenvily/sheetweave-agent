@@ -79,7 +79,8 @@ def test_web_preview_displays_original_and_model_result(tmp_path: Path) -> None:
     assert "内容结构与来源映射" in response.text
     assert "模型结果" in response.text
     assert "模型已规范整理" in response.text
-    assert "无需重新选择文件" in response.text
+    assert "周报审核工作区" in response.text
+    assert "点击内容块可反向定位来源" not in response.text
     assert 'href="/download/' in response.text
     assert fake.calls == 1
 

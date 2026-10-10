@@ -81,7 +81,7 @@ def test_web_previews_xlsx_raw_rows_mapping_and_blocks(tmp_path: Path) -> None:
     assert "f1:数据:2" in response.text
     assert "原始备注" in response.text
     assert "必须显示" in response.text
-    assert "原文模式 · 零 LLM" in response.text
+    assert "原文模式" in response.text
 
 
 def test_web_generates_general_xlsx_docx() -> None:

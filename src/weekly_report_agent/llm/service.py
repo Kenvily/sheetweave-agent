@@ -323,6 +323,7 @@ class LLMService:
                         mode=ContentMode.ORIGINAL.value,
                         validation_level="pass",
                         validation_warnings=(),
+                        selected_version="auto",
                     )
                     for block in prepared.blocks
                 ),
@@ -393,6 +394,7 @@ class LLMService:
                         mode=selected_mode.value,
                         validation_level="pass",
                         validation_warnings=(),
+                        selected_version="auto",
                     )
                 )
                 continue
@@ -409,6 +411,7 @@ class LLMService:
                         ValidationLevel.CONFLICT: "conflict",
                     }[result.level],
                     validation_warnings=_warning_lines(result, correction_failed=correction_failed),
+                    selected_version="auto",
                 )
             )
         return replace(prepared, blocks=tuple(updated))
@@ -429,7 +432,17 @@ class LLMService:
             raise ValueError("该内容块来自只读结构字段，不能使用 LLM 改写。")
         if target.edited_text is not None and not overwrite_edited:
             raise ValueError("该内容块包含人工修改，重新生成前必须确认覆盖。")
-        target = replace(target, edited_text=None) if overwrite_edited else target
+        target = (
+            replace(
+                target,
+                edited_text=None,
+                edited_validation_level=None,
+                edited_validation_warnings=(),
+                selected_version="auto",
+            )
+            if overwrite_edited
+            else target
+        )
         partial = replace(prepared, blocks=(target,))
         processed = self.process(
             partial,
