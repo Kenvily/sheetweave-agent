@@ -13,15 +13,19 @@ from pathlib import Path
 from xml.etree import ElementTree as ET
 
 from flask import Flask, render_template, request, send_file
+from werkzeug.datastructures import FileStorage
 from werkzeug.exceptions import RequestEntityTooLarge
 
 from .planner import validate_section_number
-from .service import generate_report
+from .rules import RulePreset, list_rule_presets, load_rule_preset
+from .service import generate_report, prepare_report
 
 DEFAULT_TEMPLATE = Path("data/研发三部周报模板.docx")
 DOCX_MIME_TYPE = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
 MAX_UPLOAD_SIZE = 16 * 1024 * 1024
 DEFAULT_SECTION_NUMBER = 9
+SUPPORTED_INPUT_SUFFIXES = {".csv", ".xlsx"}
+FIELD_KEYS = ("project", "detail", "status", "content", "issues", "next_plan")
 
 
 def _parse_date(value: str) -> date:
@@ -31,7 +35,9 @@ def _parse_date(value: str) -> date:
         raise ValueError("报告日期必须使用 YYYY-MM-DD 格式。") from exc
 
 
-def _parse_section_number(value: str) -> int:
+def _parse_section_number(value: str, preset: RulePreset) -> int:
+    if not value.strip():
+        return preset.document.heading_start_default
     try:
         section_number = int(value)
     except ValueError as exc:
@@ -39,9 +45,25 @@ def _parse_section_number(value: str) -> int:
     return validate_section_number(section_number)
 
 
-def _require_extension(filename: str, extension: str, label: str) -> None:
-    if Path(filename).suffix.lower() != extension:
-        raise ValueError(f"{label}必须是 {extension} 文件。")
+def _require_extension(filename: str, extensions: set[str], label: str) -> str:
+    suffix = Path(filename).suffix.lower()
+    if suffix not in extensions:
+        allowed = "或 ".join(f"{item} 文件" for item in sorted(extensions))
+        raise ValueError(f"{label}必须是 {allowed}。")
+    return suffix
+
+
+def _data_upload() -> FileStorage | None:
+    """Accept the M1 field name while retaining the old Web contract."""
+    return request.files.get("data_file") or request.files.get("csv_file")
+
+
+def _field_mapping() -> dict[str, str]:
+    return {
+        key: request.form.get(f"field_{key}", "").strip()
+        for key in FIELD_KEYS
+        if request.form.get(f"field_{key}", "").strip()
+    }
 
 
 def create_app(template_path: Path | None = None) -> Flask:
@@ -55,7 +77,13 @@ def create_app(template_path: Path | None = None) -> Flask:
         REPORT_TEMPLATE_PATH=configured_template.resolve(),
     )
 
-    def show_form(*, error: str | None = None, status: int = 200):
+    def show_form(
+        *,
+        error: str | None = None,
+        status: int = 200,
+        prepared=None,
+        selected_preset: RulePreset | None = None,
+    ):
         return (
             render_template(
                 "index.html",
@@ -63,37 +91,66 @@ def create_app(template_path: Path | None = None) -> Flask:
                 today=date.today().isoformat(),
                 form=request.form,
                 default_section_number=DEFAULT_SECTION_NUMBER,
+                presets=list_rule_presets(),
+                prepared=prepared,
+                selected_preset=selected_preset,
             ),
             status,
         )
+
+    def save_input(upload: FileStorage, workdir: Path) -> Path:
+        if not upload.filename:
+            raise ValueError("请选择周报 CSV 或 XLSX 文件。")
+        suffix = _require_extension(upload.filename, SUPPORTED_INPUT_SUFFIXES, "周报数据")
+        input_path = workdir / f"input{suffix}"
+        upload.save(input_path)
+        return input_path
 
     @app.get("/")
     def index():
         return show_form()
 
+    @app.post("/preview")
+    def preview():
+        upload = _data_upload()
+        try:
+            if upload is None:
+                raise ValueError("请选择周报 CSV 或 XLSX 文件。")
+            preset = load_rule_preset(request.form.get("preset", "rd3"))
+            with tempfile.TemporaryDirectory(prefix="weekly-report-preview-") as directory:
+                input_path = save_input(upload, Path(directory))
+                prepared, preset = prepare_report(
+                    input_path,
+                    preset_id=preset.id,
+                    requested_week=request.form.get("week", "").strip() or None,
+                    sheet=request.form.get("sheet", "").strip() or None,
+                    field_mapping=_field_mapping(),
+                    display_filename=upload.filename,
+                )
+            return show_form(prepared=prepared, selected_preset=preset)
+        except (FileNotFoundError, OSError, ValueError, zipfile.BadZipFile, ET.ParseError) as exc:
+            return show_form(error=str(exc), status=400)
+
     @app.post("/generate")
     def generate():
-        csv_upload = request.files.get("csv_file")
+        upload = _data_upload()
         template_upload = request.files.get("template_file")
         try:
-            if csv_upload is None or not csv_upload.filename:
-                raise ValueError("请选择周报 CSV 文件。")
-            _require_extension(csv_upload.filename, ".csv", "周报数据")
+            if upload is None:
+                raise ValueError("请选择周报 CSV 或 XLSX 文件。")
+            preset = load_rule_preset(request.form.get("preset", "rd3"))
             report_date = _parse_date(request.form.get("report_date", ""))
             requested_week = request.form.get("week", "").strip() or None
-            section_number = _parse_section_number(
-                request.form.get("section_number", str(DEFAULT_SECTION_NUMBER))
-            )
+            section_number = _parse_section_number(request.form.get("section_number", ""), preset)
 
             with tempfile.TemporaryDirectory(prefix="weekly-report-web-") as directory:
                 workdir = Path(directory)
-                input_path = workdir / "input.csv"
+                input_path = save_input(upload, workdir)
                 output_path = workdir / "report.docx"
-                csv_upload.save(input_path)
 
                 selected_template = app.config["REPORT_TEMPLATE_PATH"]
                 if template_upload is not None and template_upload.filename:
-                    _require_extension(template_upload.filename, ".docx", "报告模板")
+                    _require_extension(template_upload.filename, {".docx"}, "报告模板")
                     selected_template = workdir / "template.docx"
                     template_upload.save(selected_template)
 
@@ -104,10 +161,14 @@ def create_app(template_path: Path | None = None) -> Flask:
                     report_date=report_date,
                     requested_week=requested_week,
                     section_number=section_number,
+                    preset_id=preset.id,
+                    sheet=request.form.get("sheet", "").strip() or None,
+                    field_mapping=_field_mapping(),
+                    display_filename=upload.filename,
                 )
                 report_content = output_path.read_bytes()
 
-            filename = f"研发三部周报-{report_date:%Y%m%d}.docx"
+            filename = f"{preset.name}-{report_date:%Y%m%d}.docx"
             return send_file(
                 io.BytesIO(report_content),
                 mimetype=DOCX_MIME_TYPE,

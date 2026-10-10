@@ -73,3 +73,103 @@ class ReportPlan:
     section_number: int
     item_count: int
     paragraphs: tuple[ReportParagraph, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class SourceFile:
+    """Metadata for one parsed source file and optional worksheet."""
+
+    file_id: str
+    filename: str
+    file_type: str
+    sheet: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class SourceRecord:
+    """One source row with a stable identity and physical location."""
+
+    source_id: str
+    file_id: str
+    sheet: str | None
+    row_number: int
+    fields: dict[str, str]
+    original_text: str
+    raw_values: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class ParsedInput:
+    """Normalized source records plus mapping and validation metadata."""
+
+    source_files: tuple[SourceFile, ...]
+    sources: tuple[SourceRecord, ...]
+    field_mapping: dict[str, str]
+    headers: tuple[str, ...]
+    warnings: tuple[str, ...] = ()
+    available_sheets: tuple[str, ...] = ()
+    month: str = ""
+    week: str = ""
+
+    @property
+    def source_label(self) -> str:
+        """Return the selected weekly label when one exists."""
+        return f"{self.month}{self.week}"
+
+
+@dataclass(frozen=True, slots=True)
+class ContentBlock:
+    """A traceable content block generated from one or more source rows."""
+
+    block_id: str
+    section_id: str
+    section_title: str
+    group_key: str
+    source_ids: tuple[str, ...]
+    original_text: str
+    generated_text: str | None = None
+    edited_text: str | None = None
+    mode: str = "original"
+    validation_warnings: tuple[str, ...] = ()
+
+    @property
+    def effective_text(self) -> str:
+        """Return edited, generated, or original text in precedence order."""
+        if self.edited_text is not None:
+            return self.edited_text
+        if self.generated_text is not None:
+            return self.generated_text
+        return self.original_text
+
+
+@dataclass(frozen=True, slots=True)
+class PreparedReport:
+    """Current deterministic report state used by previews and export."""
+
+    preset_id: str
+    source: ParsedInput
+    blocks: tuple[ContentBlock, ...]
+
+    def source_by_id(self, source_id: str) -> SourceRecord:
+        """Return a source record by stable ID."""
+        for source in self.source.sources:
+            if source.source_id == source_id:
+                return source
+        raise KeyError(f"未知来源 ID：{source_id}")
+
+    def block_by_id(self, block_id: str) -> ContentBlock:
+        """Return a content block by stable ID."""
+        for block in self.blocks:
+            if block.block_id == block_id:
+                return block
+        raise KeyError(f"未知内容块 ID：{block_id}")
+
+    def blocks_for_source(self, source_id: str) -> tuple[ContentBlock, ...]:
+        """Return every content block linked to a source record."""
+        self.source_by_id(source_id)
+        return tuple(block for block in self.blocks if source_id in block.source_ids)
+
+    def sources_for_block(self, block_id: str) -> tuple[SourceRecord, ...]:
+        """Return every source record linked to a content block."""
+        block = self.block_by_id(block_id)
+        return tuple(self.source_by_id(source_id) for source_id in block.source_ids)

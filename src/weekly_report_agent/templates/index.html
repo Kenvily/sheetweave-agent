@@ -7,11 +7,11 @@
   <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
 </head>
 <body>
-  <main class="container">
+  <main class="container{% if prepared %} container-wide{% endif %}">
     <header>
       <p class="eyebrow">WEEKLY REPORT</p>
       <h1>研发周报生成器</h1>
-      <p class="description">上传 CSV，按固定规则整理编号、日期、称呼和 DOCX 排版。</p>
+      <p class="description">上传 CSV 或 XLSX，确认规则和字段后，按确定性规则生成 DOCX。</p>
     </header>
 
     <section class="card">
@@ -20,29 +20,43 @@
       {% endif %}
 
       <form action="{{ url_for('generate') }}" method="post" enctype="multipart/form-data">
-        <label class="field">
-          <span>周报 CSV <b>必填</b></span>
-          <input type="file" name="csv_file" accept=".csv,text/csv" required>
-          <small>UTF-8 编码，支持多行表头</small>
-        </label>
-
         <div class="grid">
+          <label class="field">
+            <span>周报 CSV / XLSX <b>必填</b></span>
+            <input type="file" name="csv_file" accept=".csv,.xlsx,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" required>
+            <small>CSV 使用 UTF-8；XLSX 可指定工作表</small>
+          </label>
+          <label class="field">
+            <span>周报规则</span>
+            <select name="preset" required>
+              {% for preset in presets %}
+              <option value="{{ preset.id }}"{% if form.get('preset', 'rd3') == preset.id %} selected{% endif %}>{{ preset.name }}</option>
+              {% endfor %}
+            </select>
+            <small>研发三部兼容旧格式；通用周报使用单行表头</small>
+          </label>
+        </div>
+
+        <div class="grid grid-three">
           <label class="field">
             <span>报告日期 <b>必填</b></span>
             <input type="date" name="report_date" value="{{ form.get('report_date', today) }}" required>
           </label>
           <label class="field">
-            <span>指定周次 <i>可选</i></span>
+            <span>指定周次 <i>研发三部可选</i></span>
             <input type="text" name="week" value="{{ form.get('week', '') }}" placeholder="第1周">
-            <small>留空时选择最新有效周次</small>
+          </label>
+          <label class="field">
+            <span>XLSX 工作表 <i>可选</i></span>
+            <input type="text" name="sheet" value="{{ form.get('sheet', '') }}" placeholder="默认第一个 Sheet">
           </label>
         </div>
 
         <div class="grid">
           <label class="field">
-            <span>起始章节号</span>
-            <input type="number" name="section_number" min="1" max="999" value="{{ form.get('section_number', default_section_number) }}" required>
-            <small>研发三部默认从 9 开始</small>
+            <span>起始章节号 <i>可选</i></span>
+            <input type="number" name="section_number" min="1" max="999" value="{{ form.get('section_number', '') }}" placeholder="按规则默认值">
+            <small>研发三部默认 9，通用周报默认 1</small>
           </label>
           <label class="field">
             <span>自定义模板 <i>可选</i></span>
@@ -51,14 +65,79 @@
           </label>
         </div>
 
+        <details>
+          <summary>手动字段映射（自动识别失败时填写）</summary>
+          <div class="mapping-grid">
+            {% for key, label in [('project', '项目'), ('detail', '具体内容'), ('status', '状态'), ('content', '本周工作'), ('issues', '问题与风险'), ('next_plan', '下周计划')] %}
+            <label class="field compact">
+              <span>{{ label }}</span>
+              <input type="text" name="field_{{ key }}" value="{{ form.get('field_' ~ key, '') }}" placeholder="源文件列名">
+            </label>
+            {% endfor %}
+          </div>
+        </details>
+
         <aside>
-          <strong>固定规则</strong>
-          <span>标题按 1. / 1.1 / 1.1.1，正文按 1、/（1）/①；全篇 1.5 倍行距。</span>
+          <strong>确定性规则</strong>
+          <span>原文模式不调用 LLM；标题按 1. / 1.1 / 1.1.1，正文按 1、/（1）/①；全篇 1.5 倍行距。</span>
         </aside>
 
-        <button type="submit">生成并下载 DOCX</button>
+        <div class="actions">
+          <button class="secondary" type="submit" formaction="{{ url_for('preview') }}">预览来源与结构</button>
+          <button type="submit">生成并下载 DOCX</button>
+        </div>
       </form>
     </section>
+
+    {% if prepared %}
+    <section class="preview-stack" aria-label="输入预览">
+      <article class="card preview-card">
+        <div class="section-head">
+          <div><p class="eyebrow">SOURCE</p><h2>来源表格</h2></div>
+          <span class="badge">{{ selected_preset.name }}</span>
+        </div>
+        <p class="meta">
+          文件 {{ prepared.source.source_files[0].filename }}；有效行 {{ prepared.source.sources|length }}；
+          {% if prepared.source.available_sheets %}工作表 {{ prepared.source.source_files[0].sheet }}（可选：{{ prepared.source.available_sheets|join('、') }}）{% else %}CSV 物理行号已保留{% endif %}
+        </p>
+        <p class="meta">字段映射：{% for key, value in prepared.source.field_mapping.items() %}<code>{{ key }} ← {{ value }}</code>{% if not loop.last %}　{% endif %}{% endfor %}</p>
+        {% if prepared.source.warnings %}
+        <ul class="warnings">{% for warning in prepared.source.warnings %}<li>{{ warning }}</li>{% endfor %}</ul>
+        {% endif %}
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr><th>位置</th><th>来源 ID</th>{% for header in prepared.source.headers %}<th>{{ header }}</th>{% endfor %}</tr>
+            </thead>
+            <tbody>
+              {% for source in prepared.source.sources %}
+              <tr id="source-{{ source.source_id|replace(':', '-') }}">
+                <td>{% if source.sheet %}{{ source.sheet }}!{% endif %}{{ source.row_number }}</td>
+                <td><code>{{ source.source_id }}</code></td>
+                {% for value in source.raw_values %}<td>{{ value }}</td>{% endfor %}
+                {% for _unused in range(prepared.source.headers|length - source.raw_values|length) %}<td></td>{% endfor %}
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      </article>
+
+      <article class="card preview-card">
+        <div class="section-head"><div><p class="eyebrow">BLOCKS</p><h2>内容结构与来源映射</h2></div><span class="badge">原文模式 · 零 LLM</span></div>
+        <div class="blocks">
+          {% for block in prepared.blocks %}
+          <section class="block">
+            <div><strong>{{ block.section_title }} / {{ block.group_key }}</strong><code>{{ block.block_id }}</code></div>
+            <p>{{ block.effective_text }}</p>
+            <small>来源：{{ block.source_ids|join('、') }}</small>
+          </section>
+          {% endfor %}
+        </div>
+        <p class="preview-note">预览不保存上传文件。生成 DOCX 时请重新选择同一文件；跨请求审核会话将在 M3 实现。</p>
+      </article>
+    </section>
+    {% endif %}
   </main>
 </body>
 </html>

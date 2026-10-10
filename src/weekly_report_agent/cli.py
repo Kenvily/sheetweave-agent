@@ -31,12 +31,14 @@ def build_parser() -> argparse.ArgumentParser:
         "--output", type=Path, default=Path("output/研发三部周报.docx"), help="输出 DOCX"
     )
     parser.add_argument("--week", help="周次，例如“第1周”或“2026年9月第1周”")
+    parser.add_argument("--preset", choices=("rd3", "general"), default="rd3", help="周报规则预设")
+    parser.add_argument("--sheet", help="XLSX 工作表名称，默认使用第一个工作表")
     parser.add_argument("--report-date", type=_iso_date, default=date.today(), help="报告日期")
     parser.add_argument(
         "--section-number",
         type=int,
-        default=9,
-        help="一级标题起始章节号，默认 9",
+        default=None,
+        help="一级标题起始章节号；留空使用所选预设默认值",
     )
     return parser
 
@@ -53,6 +55,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             report_date=args.report_date,
             requested_week=args.week,
             section_number=args.section_number,
+            preset_id=args.preset,
+            sheet=args.sheet,
         )
     except (FileNotFoundError, ValueError) as exc:
         parser.error(str(exc))
