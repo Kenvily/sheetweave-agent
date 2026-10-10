@@ -23,7 +23,7 @@ class WebFakeClient:
                 "blocks": [
                     {
                         "block_id": block["block_id"],
-                        "text": block["text"] + "，模型已规范整理",
+                        "text": block["editable_text"] + "，模型已规范整理",
                     }
                     for block in request["blocks"]
                 ]
@@ -124,3 +124,46 @@ def test_original_web_mode_never_calls_model_or_needs_consent() -> None:
 
     assert response.status_code == 200
     assert fake.calls == 0
+
+
+class ConflictingWebClient:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def complete(self, messages: Sequence[dict[str, str]], model: str) -> str:
+        self.calls += 1
+        request = json.loads(messages[-1]["content"])
+        return json.dumps(
+            {
+                "blocks": [
+                    {
+                        "block_id": block["block_id"],
+                        "text": block["editable_text"].replace("0.81", "0.91"),
+                    }
+                    for block in request["blocks"]
+                ]
+            },
+            ensure_ascii=False,
+        )
+
+
+def test_conflicting_candidate_is_explained_and_excluded_from_snapshot(tmp_path: Path) -> None:
+    fake = ConflictingWebClient()
+    client = _client(fake, tmp_path)
+
+    preview = client.post("/preview", data=_form(), content_type="multipart/form-data")
+
+    assert preview.status_code == 200
+    assert "严重冲突" in preview.text
+    assert "本次 DOCX 已自动使用原文" in preview.text
+    assert "AUC 0.91" in preview.text
+    assert "AUC 0.81" in preview.text
+    assert fake.calls == 2
+    marker = 'href="/download/'
+    token = preview.text.split(marker, 1)[1].split('"', 1)[0]
+    response = client.get(f"/download/{token}")
+    with zipfile.ZipFile(io.BytesIO(response.data)) as package:
+        document = package.read("word/document.xml").decode()
+    assert "AUC 0.81" in document
+    assert "AUC 0.91" not in document
+    assert fake.calls == 2

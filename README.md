@@ -10,10 +10,16 @@
 - 保留 CSV 物理行号或 XLSX Sheet/行号，为来源记录和内容块生成稳定 ID。
 - Web 页面可预览完整原始行、规范字段、内容块及来源映射，再生成 DOCX。
 - 支持原文保留、规范润色、精简总结、详细整理和自定义要求五种内容模式。
+- LLM 仅能改写所选周次的工作内容；项目、任务、结构状态和日期字段只作为只读上下文。
+- 对模型版本、指标、百分比、百分点、数量、日期和任务状态执行归一化分级校验。
 - DeepSeek API Key 仅从服务端环境读取，不在页面显示、保存或回传。
 - CLI 和 Web 均保留原有研发三部生成方式。
 
-原文保留模式不需要 API Key，也不会发起模型网络请求。其他模式只发送内容块、所属章节和项目名称，不发送完整上传文件；使用前需要明确确认允许外发。Web 预览会生成一个有效期为 2 小时的临时 DOCX 快照，可直接下载，无需重新选择文件；模型模式也不会在下载时再次调用模型。跨请求人工编辑属于后续阶段。
+原文保留模式不需要 API Key，也不会发起模型网络请求。其他模式只发送可编辑工作内容、必要的只读结构上下文和归一化事实，不发送完整上传文件；使用前需要明确确认允许外发。Web 预览会生成一个有效期为 2 小时的临时 DOCX 快照，可直接下载，无需重新选择文件；模型模式也不会在下载时再次调用模型。跨请求人工编辑属于后续阶段。
+
+## 当前开发阶段
+
+ROADMAP 的 M0～M2 已完成：现有 CLI/Web 和 DOCX 规则链路已有回归保护，CSV/XLSX、规则预设与来源追溯底座已接入，五种内容模式及分级事实校验已可用。下一阶段是 M3，将增加三栏审核、表格与内容块双向高亮、文本 Diff、人工编辑、Web 单块重生成和跨请求临时工作状态。M4 的 DOCX 输出与 OOXML 校验已有基础，但 PDF 版式预览尚未实现；匿名统计与完整网页帮助属于 M5。
 
 ## 规则与格式
 
@@ -35,7 +41,9 @@
 - `src/weekly_report_agent/rules/`：`rd3`、`general` 规则预设及 JSON 校验。
 - `src/weekly_report_agent/models.py`：来源记录、内容块和报告计划模型。
 - `src/weekly_report_agent/content_builder.py`：内容组织及双向来源关系。
-- `src/weekly_report_agent/llm/`：DeepSeek 配置、OpenAI 兼容客户端、内容模式及事实保护。
+- `src/weekly_report_agent/llm/service.py`：内容模式、最小化 Prompt、批处理、有限修正和安全回退。
+- `src/weekly_report_agent/llm/facts.py`：模型版本、指标、数量、日期和状态等带类型事实提取与归一化。
+- `src/weekly_report_agent/llm/validation.py`：模式相关的通过、待人工确认和严重冲突分级校验。
 - `src/weekly_report_agent/normalizer.py`：术语、正式称呼和相对星期规范化。
 - `src/weekly_report_agent/planner.py`：规则化正文层级和报告编号规划。
 - `src/weekly_report_agent/docx_renderer.py`：基于模板 OOXML 渲染 DOCX。
@@ -163,7 +171,7 @@ python -m weekly_report_agent \
   --allow-external
 ```
 
-其他模式的 `--content-mode` 可设为 `concise`、`expand` 或 `custom`；自定义模式还需传入 `--custom-instruction`。模型返回结果会按稳定内容块 ID 对齐，并检查数字、日期、模型/技术名和任务状态；结构不完整或疑似改变事实时不会采用结果。
+其他模式的 `--content-mode` 可设为 `concise`、`expand` 或 `custom`；自定义模式还需传入 `--custom-instruction`。模型返回结果会按稳定内容块 ID 对齐。校验分为“通过、待人工确认、严重冲突”：通过的候选进入 DOCX；待确认或严重冲突的候选保留在 Web 预览中并展示原文、生成内容和原因，但 DOCX 自动回退原文。严重冲突只进行一次针对该块的修正，不会反复重跑整个批次；结构不完整或 JSON 无效仍会终止本次模型处理。
 
 ## 验证
 

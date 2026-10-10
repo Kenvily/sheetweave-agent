@@ -30,7 +30,7 @@ class FakeClient:
         return json.dumps(
             {
                 "blocks": [
-                    {"block_id": block["block_id"], "text": block["text"] + self.suffix}
+                    {"block_id": block["block_id"], "text": block["editable_text"] + self.suffix}
                     for block in request["blocks"]
                 ]
             },
@@ -86,7 +86,10 @@ def test_llm_modes_preserve_ids_sources_and_facts(tmp_path: Path, mode: str) -> 
     assert [block.source_ids for block in result.blocks] == [
         block.source_ids for block in prepared.blocks
     ]
-    assert all(block.generated_text.endswith("，表述已整理") for block in result.blocks)
+    editable = [block for block in result.blocks if block.llm_editable]
+    readonly = [block for block in result.blocks if not block.llm_editable]
+    assert all(block.generated_text.endswith("，表述已整理") for block in editable)
+    assert all(block.generated_text is None for block in readonly)
     assert all(block.mode == mode for block in result.blocks)
 
 
@@ -127,22 +130,24 @@ def test_invalid_structured_responses_are_rejected(
     assert all(block.generated_text is None for block in prepared.blocks)
 
 
-def test_fact_changes_are_rejected_without_partial_update(tmp_path: Path) -> None:
+def test_fact_conflict_is_retained_for_review_and_falls_back_per_block(tmp_path: Path) -> None:
     prepared = _prepared(tmp_path)
-    payload = {
-        "blocks": [
-            {
-                "block_id": block.block_id,
-                "text": block.original_text.replace("0.81", "0.91"),
-            }
-            for block in prepared.blocks
-        ]
-    }
+    block = next(item for item in prepared.blocks if item.llm_editable)
+    unsafe = block.original_text.replace("0.81", "0.91")
+    payload = {"blocks": [{"block_id": block.block_id, "text": unsafe}]}
+    client = FakeClient(response=json.dumps(payload))
 
-    with pytest.raises(LLMResponseError, match="数字或指标"):
-        _service(FakeClient(response=json.dumps(payload))).process(prepared, "polish")
+    result = _service(client).process(prepared, "polish")
+    checked = result.block_by_id(block.block_id)
 
-    assert all(block.generated_text is None for block in prepared.blocks)
+    assert len(client.calls) == 2  # one normal call and at most one targeted correction
+    assert checked.generated_text == unsafe
+    assert checked.validation_level == "conflict"
+    assert checked.effective_text == checked.original_text
+    assert any(
+        "AUC 0.81" in warning and "AUC 0.91" in warning for warning in checked.validation_warnings
+    )
+    assert all(item.generated_text is None for item in result.blocks if not item.llm_editable)
 
 
 def test_equivalent_numeric_formatting_and_list_renumbering_are_accepted(tmp_path: Path) -> None:
@@ -171,10 +176,12 @@ def test_business_number_remains_protected_when_list_numbers_change(tmp_path: Pa
     block = prepared.blocks[0]
     payload = {"blocks": [{"block_id": block.block_id, "text": "AUC 0.91，完成验证。"}]}
 
-    with pytest.raises(LLMResponseError, match="数字或指标"):
-        _service(FakeClient(response=json.dumps(payload, ensure_ascii=False))).process(
-            prepared, "polish"
-        )
+    result = _service(FakeClient(response=json.dumps(payload, ensure_ascii=False))).process(
+        prepared, "polish"
+    )
+
+    assert result.blocks[0].validation_level == "conflict"
+    assert result.blocks[0].effective_text == block.original_text
 
 
 def test_model_allowlist_and_missing_key_are_enforced(tmp_path: Path) -> None:
@@ -256,26 +263,33 @@ def test_aggregation_count_is_not_ignored_without_duplicate_source_fact(tmp_path
     block = prepared.blocks[0]
     payload = {"blocks": [{"block_id": block.block_id, "text": "两项相关性均为0.9。"}]}
 
-    with pytest.raises(LLMResponseError, match="新增：2项"):
-        _service(FakeClient(response=json.dumps(payload, ensure_ascii=False))).process(
-            prepared, "concise"
-        )
+    result = _service(FakeClient(response=json.dumps(payload, ensure_ascii=False))).process(
+        prepared, "concise"
+    )
+
+    assert result.blocks[0].validation_level == "conflict"
+    assert result.blocks[0].effective_text == block.original_text
+    assert any("新增数量：2项" in warning for warning in result.blocks[0].validation_warnings)
 
 
-def test_fact_change_error_reports_missing_and_added_values(tmp_path: Path) -> None:
+def test_prompt_exposes_only_editable_text_and_readonly_context(tmp_path: Path) -> None:
     prepared = _prepared(tmp_path)
-    payload = {
-        "blocks": [
-            {
-                "block_id": block.block_id,
-                "text": block.original_text.replace("0.81", "0.91"),
-            }
-            for block in prepared.blocks
-        ]
-    }
+    client = FakeClient()
 
-    with pytest.raises(LLMResponseError, match=r"缺少：0\.81；新增：0\.91"):
-        _service(FakeClient(response=json.dumps(payload))).process(prepared, "polish")
+    _service(client).process(prepared, "polish")
+
+    request = json.loads(client.calls[0][0][-1]["content"])
+    assert len(request["blocks"]) == 1
+    payload = request["blocks"][0]
+    assert set(payload) == {
+        "block_id",
+        "editable_text",
+        "immutable_context",
+        "protected_facts",
+    }
+    assert "text" not in payload
+    assert payload["editable_text"] == prepared.blocks[0].original_text
+    assert payload["immutable_context"] == [{"project": "模型平台"}, {"project": "模型平台"}]
 
 
 def test_model_version_spacing_and_completed_status_are_equivalent(tmp_path: Path) -> None:
@@ -320,7 +334,10 @@ def test_model_version_change_or_removal_is_rejected(tmp_path: Path, generated: 
     block = prepared.blocks[0]
     payload = {"blocks": [{"block_id": block.block_id, "text": generated}]}
 
-    with pytest.raises(LLMResponseError, match="模型或技术名"):
-        _service(FakeClient(response=json.dumps(payload, ensure_ascii=False))).process(
-            prepared, "polish"
-        )
+    result = _service(FakeClient(response=json.dumps(payload, ensure_ascii=False))).process(
+        prepared, "polish"
+    )
+
+    assert result.blocks[0].validation_level == "conflict"
+    assert result.blocks[0].effective_text == block.original_text
+    assert any("模型与版本" in warning for warning in result.blocks[0].validation_warnings)

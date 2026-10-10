@@ -36,6 +36,7 @@ class SectionRule:
     title: str
     source_field: str
     group_by: str
+    llm_editable: bool
 
 
 @dataclass(frozen=True, slots=True)
@@ -123,12 +124,16 @@ def validate_rule_preset(payload: dict[str, Any]) -> RulePreset:
         group_by = _string(section.get("group_by", "row"), f"sections[{index}].group_by")
         if group_by not in SUPPORTED_GROUPINGS:
             raise RulePresetError(f"章节 {section_id} 的 group_by 无效：{group_by}。")
+        llm_editable = section.get("llm_editable", source_field in {"progress", "content"})
+        if not isinstance(llm_editable, bool):
+            raise RulePresetError(f"章节 {section_id} 的 llm_editable 必须是布尔值。")
         sections.append(
             SectionRule(
                 id=section_id,
                 title=_string(section.get("title"), f"sections[{index}].title"),
                 source_field=source_field,
                 group_by=group_by,
+                llm_editable=llm_editable,
             )
         )
     section_ids = [section.id for section in sections]

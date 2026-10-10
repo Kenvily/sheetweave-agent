@@ -45,6 +45,8 @@ def build_content_blocks(source: ParsedInput, preset: RulePreset) -> tuple[Conte
                     group_key=display_group,
                     source_ids=source_ids,
                     original_text=original_text,
+                    source_field=section.source_field,
+                    llm_editable=section.llm_editable,
                 )
             )
     return tuple(blocks)

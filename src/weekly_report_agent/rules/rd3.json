@@ -17,6 +17,7 @@
       "id": "weekly_work",
       "title": "大模型产品研发",
       "source_field": "progress",
+      "llm_editable": true,
       "group_by": "row"
     }
   ],
