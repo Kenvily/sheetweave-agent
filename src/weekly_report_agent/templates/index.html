@@ -13,7 +13,7 @@
     <section class="card">
       {% if error %}<div class="alert" role="alert">{{ error }}</div>{% endif %}
 
-      <form action="{{ url_for('generate') }}" method="post" enctype="multipart/form-data">
+      <form id="report-form" action="{{ url_for('generate') }}" method="post" enctype="multipart/form-data">
         <div class="grid">
           <label class="field">
             <span>周报文件</span>
@@ -29,20 +29,31 @@
           </label>
         </div>
 
-        <div class="grid grid-three">
+        <div class="grid parameter-grid">
           <label class="field">
             <span>报告日期</span>
             <input type="date" name="report_date" value="{{ form.get('report_date', today) }}" required>
           </label>
           <label class="field">
             <span>指定周次（可选）</span>
-            <input type="text" name="week" value="{{ form.get('week', '') }}" placeholder="第1周">
+            <select name="week">
+              <option value="">自动选择最新有效周次</option>
+              {% if form.get('week') %}<option value="{{ form.get('week') }}" selected>{{ form.get('week') }}</option>{% endif %}
+            </select>
           </label>
           <label class="field">
             <span>XLSX 工作表（可选）</span>
-            <input type="text" name="sheet" value="{{ form.get('sheet', '') }}" placeholder="默认第一个工作表">
+            <select name="sheet">
+              <option value="">自动选择第一个工作表</option>
+              {% if form.get('sheet') %}<option value="{{ form.get('sheet') }}" selected>{{ form.get('sheet') }}</option>{% endif %}
+            </select>
+          </label>
+          <label class="field">
+            <span>起始章节号（可选）</span>
+            <input type="text" name="section_number" value="{{ form.get('section_number', '') }}" inputmode="numeric" pattern="[0-9]*" placeholder="按规则默认值">
           </label>
         </div>
+        <div id="input-options-status" class="option-status" role="status" aria-live="polite"></div>
 
         <div class="grid">
           <label class="field">
@@ -79,12 +90,8 @@
         </section>
 
         <details>
-          <summary>高级设置</summary>
+          <summary>高级适配设置</summary>
           <div class="advanced-grid">
-            <label class="field">
-              <span>起始章节号（可选）</span>
-              <input type="number" name="section_number" min="1" max="999" value="{{ form.get('section_number', '') }}" placeholder="按规则默认值">
-            </label>
             <label class="field">
               <span>自定义模板（可选）</span>
               <input type="file" name="template_file" accept=".docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document">
@@ -102,7 +109,7 @@
 
         <div class="actions">
           <button class="secondary" type="submit" formaction="{{ url_for('preview') }}">预览来源与内容</button>
-          <button type="submit">生成并下载 DOCX</button>
+          <button type="submit" formaction="{{ url_for('generate') }}">生成并下载 DOCX</button>
         </div>
       </form>
     </section>
@@ -158,10 +165,170 @@
           </section>
           {% endfor %}
         </div>
-        <div class="data-notice compact-notice">预览与下载是两个独立请求；在 M3 审核会话完成前，模型模式下载时会重新生成内容。</div>
+        {% if snapshot_token %}
+        <div class="snapshot-actions">
+          <a class="button-link" href="{{ url_for('download_snapshot', token=snapshot_token) }}">下载本次预览 DOCX</a>
+          <strong>本次预览已保留 2 小时，无需重新选择文件，也不会再次调用模型。</strong>
+        </div>
+        {% endif %}
       </article>
     </section>
     {% endif %}
   </main>
+  <div id="processing-overlay" class="processing-overlay" role="status" aria-live="polite" aria-hidden="true">
+    <div class="processing-panel">
+      <span class="spinner" aria-hidden="true"></span>
+      <strong id="processing-title">正在处理周报</strong>
+      <p id="processing-message">请保持页面打开，完成后会自动显示结果。</p>
+    </div>
+  </div>
+  <script>
+    (() => {
+      const form = document.getElementById("report-form");
+      const overlay = document.getElementById("processing-overlay");
+      const title = document.getElementById("processing-title");
+      const message = document.getElementById("processing-message");
+      const sourceFile = form?.elements.csv_file;
+      const preset = form?.elements.preset;
+      const week = form?.elements.week;
+      const sheet = form?.elements.sheet;
+      const sectionNumber = form?.elements.section_number;
+      const optionsStatus = document.getElementById("input-options-status");
+      if (!form || !overlay) return;
+
+      let optionsRequest;
+      const replaceOptions = (select, values, emptyLabel, selectedValue = "") => {
+        select.replaceChildren(new Option(emptyLabel, ""));
+        values.forEach((value) => select.add(new Option(value, value)));
+        select.value = values.includes(selectedValue) ? selectedValue : "";
+      };
+      const updateSectionDefault = (value) => {
+        sectionNumber.placeholder = `按规则默认值（${value}）`;
+      };
+      const loadInputOptions = async (keepSheet = false) => {
+        const file = sourceFile.files[0];
+        const presetOption = preset.options[preset.selectedIndex];
+        updateSectionDefault(presetOption.dataset.sectionDefault || "-");
+        if (!file) {
+          replaceOptions(week, [], "选择文件后加载周次");
+          replaceOptions(sheet, [], "选择 XLSX 后加载工作表");
+          optionsStatus.textContent = "";
+          return;
+        }
+        optionsRequest?.abort();
+        optionsRequest = new AbortController();
+        const requestedSheet = keepSheet ? sheet.value : "";
+        const previousWeek = week.value;
+        const payload = new FormData();
+        payload.append("csv_file", file, file.name);
+        payload.append("preset", preset.value);
+        if (requestedSheet) payload.append("sheet", requestedSheet);
+        week.disabled = true;
+        sheet.disabled = true;
+        optionsStatus.classList.remove("error");
+        optionsStatus.textContent = "正在读取工作表和周次…";
+        try {
+          const response = await fetch("{{ url_for('input_options') }}", {
+            method: "POST",
+            body: payload,
+            signal: optionsRequest.signal,
+          });
+          const data = await response.json();
+          if (!response.ok) throw new Error(data.error || "无法读取文件选项。");
+          replaceOptions(
+            sheet,
+            data.sheets,
+            data.sheets.length ? "自动选择第一个工作表" : "CSV 无工作表",
+            requestedSheet || data.selected_sheet || "",
+          );
+          const selectedWeek = data.weeks.includes(previousWeek)
+            ? previousWeek
+            : (data.default_week || "");
+          replaceOptions(
+            week,
+            data.weeks,
+            data.weeks.length ? "自动选择最新有效周次" : "当前规则无周次选项",
+            selectedWeek,
+          );
+          updateSectionDefault(data.section_default);
+          optionsStatus.textContent = data.sheets.length || data.weeks.length
+            ? "文件选项已加载，可直接选择工作表和周次。"
+            : "文件已读取，当前规则无需选择工作表或周次。";
+        } catch (error) {
+          if (error.name === "AbortError") return;
+          optionsStatus.classList.add("error");
+          optionsStatus.textContent = error.message;
+        } finally {
+          week.disabled = false;
+          sheet.disabled = false;
+        }
+      };
+
+      Array.from(preset.options).forEach((option) => {
+        {% for item in presets %}
+        if (option.value === "{{ item.id }}") option.dataset.sectionDefault = "{{ item.document.heading_start_default }}";
+        {% endfor %}
+      });
+      updateSectionDefault(preset.options[preset.selectedIndex].dataset.sectionDefault || "-");
+      sourceFile.addEventListener("change", () => loadInputOptions(false));
+      preset.addEventListener("change", () => loadInputOptions(false));
+      sheet.addEventListener("change", () => loadInputOptions(true));
+
+      const setProcessing = (visible) => {
+        overlay.classList.toggle("visible", visible);
+        overlay.setAttribute("aria-hidden", visible ? "false" : "true");
+        form.querySelectorAll("button").forEach((button) => { button.disabled = visible; });
+      };
+      const downloadResponse = async (response) => {
+        const disposition = response.headers.get("Content-Disposition") || "";
+        const encodedName = disposition.match(/filename\*=UTF-8''([^;]+)/i);
+        const plainName = disposition.match(/filename="?([^";]+)"?/i);
+        const filename = encodedName
+          ? decodeURIComponent(encodedName[1])
+          : (plainName ? plainName[1] : "周报.docx");
+        const url = URL.createObjectURL(await response.blob());
+        const link = document.createElement("a");
+        link.href = url;
+        link.download = filename;
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+        URL.revokeObjectURL(url);
+      };
+
+      form.addEventListener("submit", async (event) => {
+        const submitter = event.submitter;
+        const target = submitter?.formAction || form.action;
+        const isPreview = target.endsWith("/preview");
+        const mode = form.elements.content_mode.value;
+        title.textContent = isPreview ? "正在生成预览" : "正在生成 DOCX";
+        message.textContent = mode === "original"
+          ? "正在解析数据并应用排版规则，请稍候。"
+          : "正在调用 DeepSeek 整理内容并校验事实，请稍候。";
+        setProcessing(true);
+        if (isPreview) return;
+
+        event.preventDefault();
+        try {
+          const response = await fetch(target, {
+            method: "POST",
+            body: new FormData(form),
+          });
+          if (!response.ok || response.headers.get("Content-Type")?.includes("text/html")) {
+            document.open();
+            document.write(await response.text());
+            document.close();
+            return;
+          }
+          await downloadResponse(response);
+        } catch (_error) {
+          window.alert("生成请求失败，请检查网络连接后重试。");
+        } finally {
+          setProcessing(false);
+        }
+      });
+      window.addEventListener("pageshow", () => setProcessing(false));
+    })();
+  </script>
 </body>
 </html>

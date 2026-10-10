@@ -32,12 +32,15 @@ class WebFakeClient:
         )
 
 
-def _client(fake: WebFakeClient):
+def _client(fake: WebFakeClient, tmp_path: Path | None = None):
     service = LLMService(
         LLMConfig(api_key="test-key", allowed_models=("deepseek-chat",)),
         fake,
     )
-    app = create_app(ROOT / "data/研发三部周报模板.docx", service)
+    from weekly_report_agent.web_sessions import SnapshotStore
+
+    store = SnapshotStore(tmp_path / "snapshots") if tmp_path is not None else None
+    app = create_app(ROOT / "data/研发三部周报模板.docx", service, store)
     app.config["TESTING"] = True
     return app.test_client()
 
@@ -66,14 +69,35 @@ def test_web_requires_consent_before_model_call() -> None:
     assert fake.calls == 0
 
 
-def test_web_preview_displays_original_and_model_result() -> None:
+def test_web_preview_displays_original_and_model_result(tmp_path: Path) -> None:
     fake = WebFakeClient()
-    response = _client(fake).post("/preview", data=_form(), content_type="multipart/form-data")
+    response = _client(fake, tmp_path).post(
+        "/preview", data=_form(), content_type="multipart/form-data"
+    )
 
     assert response.status_code == 200
     assert "内容结构与来源映射" in response.text
     assert "模型结果" in response.text
     assert "模型已规范整理" in response.text
+    assert "无需重新选择文件" in response.text
+    assert 'href="/download/' in response.text
+    assert fake.calls == 1
+
+
+def test_preview_snapshot_download_does_not_call_model_again(tmp_path: Path) -> None:
+    fake = WebFakeClient()
+    client = _client(fake, tmp_path)
+    preview = client.post("/preview", data=_form(), content_type="multipart/form-data")
+    marker = 'href="/download/'
+    token = preview.text.split(marker, 1)[1].split('"', 1)[0]
+
+    response = client.get(f"/download/{token}")
+
+    assert response.status_code == 200
+    assert response.mimetype == DOCX_MIME_TYPE
+    with zipfile.ZipFile(io.BytesIO(response.data)) as package:
+        document = package.read("word/document.xml").decode()
+    assert "模型已规范整理" in document
     assert fake.calls == 1
 
 

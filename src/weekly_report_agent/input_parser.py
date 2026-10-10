@@ -6,6 +6,7 @@ import csv
 import re
 import zipfile
 from collections.abc import Sequence
+from dataclasses import dataclass
 from datetime import date, datetime
 from pathlib import Path
 from typing import Any
@@ -16,6 +17,16 @@ from .rules import RulePreset
 
 SUPPORTED_SUFFIXES = {".csv", ".xlsx"}
 INVALID_EXCEL_SHEETS = re.compile(r"[\\/*?:\[\]]")
+
+
+@dataclass(frozen=True, slots=True)
+class InputOptions:
+    """Selectable metadata discovered from an input file before generation."""
+
+    sheets: tuple[str, ...] = ()
+    selected_sheet: str | None = None
+    weeks: tuple[str, ...] = ()
+    default_week: str | None = None
 
 
 class InputFormatError(ValueError):
@@ -294,4 +305,40 @@ def parse_input(
         selected_sheet,
         available_sheets,
         field_mapping,
+    )
+
+
+def inspect_input_options(
+    path: Path,
+    preset: RulePreset,
+    *,
+    sheet: str | None = None,
+) -> InputOptions:
+    """Discover worksheet and weekly-column choices without building report content."""
+    if not path.is_file():
+        raise FileNotFoundError(f"输入文件不存在：{path}")
+    suffix = path.suffix.lower()
+    if suffix not in SUPPORTED_SUFFIXES:
+        raise InputFormatError("输入文件必须是 .csv 或 .xlsx。")
+    if suffix == ".csv":
+        rows = _read_csv(path)
+        selected_sheet = None
+        sheets: tuple[str, ...] = ()
+    else:
+        rows, selected_sheet, sheets = _read_xlsx(path, sheet)
+
+    weeks: tuple[str, ...] = ()
+    default_week: str | None = None
+    if preset.input.layout == "weekly_matrix":
+        try:
+            columns = discover_week_columns(rows)
+            weeks = tuple(column.label for column in columns)
+            default_week = select_week_column(rows, columns).label
+        except CsvFormatError as exc:
+            raise InputFormatError(str(exc)) from exc
+    return InputOptions(
+        sheets=sheets,
+        selected_sheet=selected_sheet,
+        weeks=weeks,
+        default_week=default_week,
     )
