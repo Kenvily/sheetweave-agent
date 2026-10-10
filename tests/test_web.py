@@ -49,6 +49,9 @@ def test_web_page_is_simple_and_has_rule_parameters() -> None:
     assert "数据处理说明" in response.text
     assert 'name="content_mode"' in response.text
     assert 'name="api_key"' not in response.text.lower()
+    assert "规范润色（等长改写）" in response.text
+    assert "精简总结（压缩去重）" in response.text
+    assert "详细整理（结构扩写）" in response.text
 
 
 def test_web_generates_download_with_custom_section_number() -> None:

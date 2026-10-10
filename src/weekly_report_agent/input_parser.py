@@ -12,8 +12,8 @@ from pathlib import Path
 from typing import Any
 
 from .csv_parser import CsvFormatError, discover_week_columns, select_week_column
-from .models import ParsedInput, SourceFile, SourceRecord
-from .rules import RulePreset
+from .models import ParsedInput, SourceFile, SourceRecord, WeekColumn
+from .rules import HistoricalCompletionRule, RulePreset
 
 SUPPORTED_SUFFIXES = {".csv", ".xlsx"}
 INVALID_EXCEL_SHEETS = re.compile(r"[\\/*?:\[\]]")
@@ -160,6 +160,30 @@ def _warnings_for_sources(sources: Sequence[SourceRecord]) -> tuple[str, ...]:
     return tuple(warnings)
 
 
+def _normalized_status(text: str) -> str:
+    """Normalize harmless differences before exact status comparison."""
+    compact = re.sub(r"\s+", "", text).strip("，,。；;：:！! ")
+    return compact.replace("已经", "已").replace("现已", "已")
+
+
+def _should_mark_historical_completion(
+    row: Sequence[str],
+    status_index: int | None,
+    week_columns: Sequence[WeekColumn],
+    selected_index: int,
+    rule: HistoricalCompletionRule | None,
+) -> bool:
+    """Return whether a completed row already had content before the selected week."""
+    if rule is None or not rule.enabled or status_index is None:
+        return False
+    completed_statuses = {_normalized_status(status) for status in rule.completed_statuses}
+    if _normalized_status(_value(row, status_index)) not in completed_statuses:
+        return False
+    return any(
+        _value(row, column.index) for column in week_columns if column.index < selected_index
+    )
+
+
 def _parse_weekly_matrix(
     rows: Sequence[Sequence[str]],
     preset: RulePreset,
@@ -175,20 +199,36 @@ def _parse_weekly_matrix(
     headers = _unique_headers(rows[0])
     mapping = resolve_fields(headers, preset, overrides)
     try:
-        week_column = select_week_column(rows, discover_week_columns(rows), requested_week)
+        week_columns = discover_week_columns(rows)
+        week_column = select_week_column(rows, week_columns, requested_week)
     except CsvFormatError as exc:
         raise InputFormatError(str(exc)) from exc
 
     sources: list[SourceRecord] = []
+    historical_completed_count = 0
+    status_index = mapping.get("status")
+    completion_rule = preset.input.historical_completion
     data_rows = rows[preset.input.header_rows :]
     for row_number, row in enumerate(data_rows, start=preset.input.header_rows + 1):
         project = _value(row, mapping["project"])
         progress = _value(row, week_column.index)
-        if not project or not progress:
+        if not project:
+            continue
+        historical_completed = _should_mark_historical_completion(
+            row,
+            status_index,
+            week_columns,
+            week_column.index,
+            completion_rule,
+        )
+        if not progress and not historical_completed:
             continue
         fields = {field: _value(row, index) for field, index in mapping.items()}
         fields["detail"] = fields.get("detail") or "周度进展"
         fields["status"] = fields.get("status", "")
+        if historical_completed:
+            progress = completion_rule.output_text
+            historical_completed_count += 1
         fields["progress"] = progress
         sources.append(
             SourceRecord(
@@ -199,16 +239,23 @@ def _parse_weekly_matrix(
                 fields=fields,
                 original_text=progress,
                 raw_values=tuple(row),
+                historical_completed=historical_completed,
             )
         )
     if not sources:
         raise InputFormatError(f"所选周次“{week_column.label}”没有有效项目进展。")
+    warnings = list(_warnings_for_sources(sources))
+    if historical_completed_count:
+        warnings.append(
+            f"根据状态列，{historical_completed_count} 项已在前序周次有记录的事项"
+            f"本次仅标记为“{completion_rule.output_text}”，不会调用 LLM 整理旧内容。"
+        )
     return ParsedInput(
         source_files=(SourceFile("f1", filename, file_type, sheet),),
         sources=tuple(sources),
         field_mapping={field: headers[index] for field, index in mapping.items()},
         headers=headers,
-        warnings=_warnings_for_sources(sources),
+        warnings=tuple(warnings),
         available_sheets=available_sheets,
         month=week_column.month,
         week=week_column.week,

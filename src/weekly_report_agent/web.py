@@ -19,6 +19,7 @@ from werkzeug.exceptions import RequestEntityTooLarge
 from .input_parser import inspect_input_options
 from .llm import (
     MODE_LABELS,
+    MODE_OPTION_LABELS,
     ContentMode,
     LLMClientError,
     LLMConfigurationError,
@@ -142,7 +143,7 @@ def create_app(
                 prepared=prepared,
                 selected_preset=selected_preset,
                 snapshot_token=snapshot_token,
-                content_modes=tuple((mode.value, MODE_LABELS[mode]) for mode in ContentMode),
+                content_modes=tuple((mode.value, MODE_OPTION_LABELS[mode]) for mode in ContentMode),
                 mode_labels={mode.value: label for mode, label in MODE_LABELS.items()},
                 selected_mode=request.form.get("content_mode", default_mode),
                 models=models,

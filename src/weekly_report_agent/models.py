@@ -96,6 +96,7 @@ class SourceRecord:
     fields: dict[str, str]
     original_text: str
     raw_values: tuple[str, ...] = ()
+    historical_completed: bool = False
 
 
 @dataclass(frozen=True, slots=True)

@@ -122,7 +122,7 @@
           <span class="badge">{{ selected_preset.name }}</span>
         </div>
         <p class="meta">
-          {{ prepared.source.source_files[0].filename }} · {{ prepared.source.sources|length }} 行
+          {{ prepared.source.source_files[0].filename }} · {{ prepared.source.sources|length }} 行参与生成
           {% if prepared.source.available_sheets %} · {{ prepared.source.source_files[0].sheet }}{% endif %}
         </p>
         <p class="meta">字段映射：{% for key, value in prepared.source.field_mapping.items() %}<code>{{ key }} ← {{ value }}</code>{% if not loop.last %}　{% endif %}{% endfor %}</p>
@@ -131,12 +131,13 @@
         {% endif %}
         <div class="table-wrap">
           <table>
-            <thead><tr><th>位置</th><th>来源 ID</th>{% for header in prepared.source.headers %}<th>{{ header }}</th>{% endfor %}</tr></thead>
+            <thead><tr><th>位置</th><th>来源 ID</th><th>规则处理</th>{% for header in prepared.source.headers %}<th>{{ header }}</th>{% endfor %}</tr></thead>
             <tbody>
               {% for source in prepared.source.sources %}
               <tr id="source-{{ source.source_id|replace(':', '-') }}">
                 <td>{% if source.sheet %}{{ source.sheet }}!{% endif %}{{ source.row_number }}</td>
                 <td><code>{{ source.source_id }}</code></td>
+                <td>{% if source.historical_completed %}<span class="status-tag">已完成 · 跳过 LLM</span>{% endif %}</td>
                 {% for value in source.raw_values %}<td>{{ value }}</td>{% endfor %}
                 {% for _unused in range(prepared.source.headers|length - source.raw_values|length) %}<td></td>{% endfor %}
               </tr>

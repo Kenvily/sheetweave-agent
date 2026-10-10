@@ -19,6 +19,15 @@ class RulePresetError(ValueError):
 
 
 @dataclass(frozen=True, slots=True)
+class HistoricalCompletionRule:
+    """Configure status-based marking for work completed in an earlier week."""
+
+    enabled: bool
+    completed_statuses: tuple[str, ...]
+    output_text: str
+
+
+@dataclass(frozen=True, slots=True)
 class InputRule:
     """Describe how source columns are resolved."""
 
@@ -26,6 +35,7 @@ class InputRule:
     header_rows: int
     required_fields: tuple[str, ...]
     column_aliases: dict[str, tuple[str, ...]]
+    historical_completion: HistoricalCompletionRule | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -109,6 +119,34 @@ def validate_rule_preset(payload: dict[str, Any]) -> RulePreset:
     if missing_aliases:
         raise RulePresetError(f"必填字段缺少列别名：{'、'.join(missing_aliases)}。")
 
+    historical_completion = None
+    raw_history_rule = input_data.get("historical_completion")
+    if raw_history_rule is not None:
+        history_rule = _object(raw_history_rule, "input.historical_completion")
+        enabled = history_rule.get("enabled", False)
+        if not isinstance(enabled, bool):
+            raise RulePresetError("input.historical_completion.enabled 必须是布尔值。")
+        completed_statuses = _string_list(
+            history_rule.get("completed_statuses", []),
+            "input.historical_completion.completed_statuses",
+            allow_empty=True,
+        )
+        output_text = _string(
+            history_rule.get("output_text", "已完成"),
+            "input.historical_completion.output_text",
+        )
+        if enabled and not completed_statuses:
+            raise RulePresetError("启用历史完成标记时必须配置完成状态。")
+        if enabled and layout != "weekly_matrix":
+            raise RulePresetError("历史完成标记仅支持包含周次列的 weekly_matrix 输入布局。")
+        if enabled and "status" not in aliases:
+            raise RulePresetError("启用历史完成标记时必须配置 status 列别名。")
+        historical_completion = HistoricalCompletionRule(
+            enabled=enabled,
+            completed_statuses=completed_statuses,
+            output_text=output_text,
+        )
+
     raw_sections = payload.get("sections")
     if not isinstance(raw_sections, list) or not raw_sections:
         raise RulePresetError("规则至少需要一个 sections 项。")
@@ -163,7 +201,13 @@ def validate_rule_preset(payload: dict[str, Any]) -> RulePreset:
         id=preset_id,
         name=name,
         schema_version=1,
-        input=InputRule(layout, header_rows, required_fields, aliases),
+        input=InputRule(
+            layout=layout,
+            header_rows=header_rows,
+            required_fields=required_fields,
+            column_aliases=aliases,
+            historical_completion=historical_completion,
+        ),
         sections=tuple(sections),
         document=DocumentRule(
             report_title=_string(document_data.get("report_title"), "document.report_title"),

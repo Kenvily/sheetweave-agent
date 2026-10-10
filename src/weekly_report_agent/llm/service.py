@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Sequence
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from enum import Enum
 
 from weekly_report_agent.models import ContentBlock, PreparedReport
@@ -32,10 +32,59 @@ MODE_LABELS: dict[ContentMode, str] = {
     ContentMode.EXPAND: "详细整理",
     ContentMode.CUSTOM: "自定义要求",
 }
-MODE_INSTRUCTIONS: dict[ContentMode, str] = {
-    ContentMode.POLISH: "统一语气、术语、逻辑和语法，保持原有信息密度。",
-    ContentMode.CONCISE: "去重并合并冗余表达，保留关键事实、指标、版本、日期和状态。",
-    ContentMode.EXPAND: "仅丰富已有事实的表达和衔接，不补充原文没有的过程或结论。",
+MODE_OPTION_LABELS: dict[ContentMode, str] = {
+    ContentMode.ORIGINAL: "原文保留（不调用模型）",
+    ContentMode.POLISH: "规范润色（等长改写）",
+    ContentMode.CONCISE: "精简总结（压缩去重）",
+    ContentMode.EXPAND: "详细整理（结构扩写）",
+    ContentMode.CUSTOM: "自定义要求（按输入处理）",
+}
+
+
+@dataclass(frozen=True, slots=True)
+class ModeProfile:
+    """An enforceable writing contract for one LLM content mode."""
+
+    objective: str
+    length_rule: str
+    organization: str
+    required_actions: tuple[str, ...]
+    forbidden_actions: tuple[str, ...]
+
+
+MODE_PROFILES: dict[ContentMode, ModeProfile] = {
+    ContentMode.POLISH: ModeProfile(
+        objective="在不改变信息量和事项粒度的前提下，将原文改成正式、流畅的周报表述。",
+        length_rule="输出长度通常控制在原文的 85%～115%；不要主动压缩或扩写。",
+        organization="保持原事项顺序和段落数量，仅修正口语、重复连接词、病句和术语写法。",
+        required_actions=("使用正式书面语", "补齐必要标点", "保持每项工作的原有粒度"),
+        forbidden_actions=("合并本来独立的任务", "增加背景、原因、方法或评价", "写成摘要式短句"),
+    ),
+    ContentMode.CONCISE: ModeProfile(
+        objective="显著压缩重复和过程性表述，形成可快速浏览的成果摘要。",
+        length_rule="目标长度为原文的 50%～75%；若受保护事实较多，以完整保留事实为先。",
+        organization="合并同类或重复表达，删除套话，每项采用“动作/成果 + 关键事实”的紧凑结构。",
+        required_actions=("去除重复主语和同义句", "合并重复事实", "优先呈现结果、指标和状态"),
+        forbidden_actions=(
+            "删除 protected_facts",
+            "把不同任务错误合并",
+            "使用空泛总结替代具体事实",
+        ),
+    ),
+    ContentMode.EXPAND: ModeProfile(
+        objective="把简略记录整理成层次清楚、语义完整的周报叙述，但不增加源文没有的事实。",
+        length_rule="目标长度为原文的 120%～160%；原文事实不足时宁可少扩写，也不得编造。",
+        organization="按“工作对象 + 已有动作 + 已有结果/状态”重组句子，补充指代和逻辑衔接。",
+        required_actions=("补全省略的句子成分", "明确已有事实之间的衔接", "提升可读性和完整性"),
+        forbidden_actions=("推测目的、原因或影响", "虚构执行过程和结论", "新增完成状态或量化成果"),
+    ),
+    ContentMode.CUSTOM: ModeProfile(
+        objective="严格按用户要求调整表达形式；用户要求只控制文风和组织，不得越过事实边界。",
+        length_rule="长度服从用户要求；用户未指定时保持与原文接近。",
+        organization="优先执行用户给出的结构和表达要求，同时保持每项事实的正确归属。",
+        required_actions=("完整执行 custom_instruction 中可安全执行的表达要求",),
+        forbidden_actions=("执行任何新增、删除、篡改或错误归属事实的要求",),
+    ),
 }
 READ_ONLY_CONTEXT_FIELDS = ("project", "detail", "status", "date", "report_date")
 
@@ -66,13 +115,55 @@ def _immutable_context(prepared: PreparedReport, block: ContentBlock) -> tuple[d
     return tuple(contexts)
 
 
-def _request_block(prepared: PreparedReport, block: ContentBlock) -> dict[str, object]:
+def _length_target(text: str, mode: ContentMode) -> dict[str, int] | None:
+    """Return an explicit per-block character target for preset writing modes."""
+    ratios = {
+        ContentMode.POLISH: (0.85, 1.15),
+        ContentMode.CONCISE: (0.50, 0.75),
+        ContentMode.EXPAND: (1.20, 1.60),
+    }
+    if mode not in ratios:
+        return None
+    minimum_ratio, maximum_ratio = ratios[mode]
+    length = len(text.strip())
     return {
+        "source_chars": length,
+        "minimum_chars": max(1, round(length * minimum_ratio)),
+        "maximum_chars": max(1, round(length * maximum_ratio)),
+    }
+
+
+def _request_block(
+    prepared: PreparedReport, block: ContentBlock, mode: ContentMode
+) -> dict[str, object]:
+    payload: dict[str, object] = {
         "block_id": block.block_id,
         "editable_text": block.original_text,
         "immutable_context": _immutable_context(prepared, block),
         "protected_facts": protected_facts(block.original_text),
     }
+    length_target = _length_target(block.original_text, mode)
+    if length_target is not None:
+        payload["length_target"] = length_target
+    return payload
+
+
+def _mode_contract(mode: ContentMode, custom_instruction: str | None) -> dict[str, object]:
+    """Build a machine-readable mode contract instead of relying on a short style hint."""
+    profile = MODE_PROFILES[mode]
+    contract: dict[str, object] = {
+        "objective": profile.objective,
+        "length_rule": profile.length_rule,
+        "organization": profile.organization,
+        "required_actions": profile.required_actions,
+        "forbidden_actions": profile.forbidden_actions,
+    }
+    if mode is ContentMode.CUSTOM:
+        instruction = (custom_instruction or "").strip()
+        if not instruction:
+            raise ValueError("自定义要求模式必须填写处理要求。")
+        contract["custom_instruction"] = instruction
+    return contract
 
 
 def _messages(
@@ -81,14 +172,14 @@ def _messages(
     mode: ContentMode,
     custom_instruction: str | None,
 ) -> tuple[dict[str, str], dict[str, str]]:
-    instruction = MODE_INSTRUCTIONS.get(mode, "")
-    if mode is ContentMode.CUSTOM:
-        instruction = (custom_instruction or "").strip()
-        if not instruction:
-            raise ValueError("自定义要求模式必须填写处理要求。")
-    source = [_request_block(prepared, block) for block in blocks]
+    contract = _mode_contract(mode, custom_instruction)
+    source = [_request_block(prepared, block, mode) for block in blocks]
     system = (
         "你是公司周报文本整理器，只能改写 editable_text。"
+        "mode_contract 是本次模式必须执行的写作契约，不是参考建议；"
+        "必须按其中的 objective、length_rule、organization、required_actions 和 "
+        "forbidden_actions 生成明显符合所选模式的结果。每个块的 length_target 是具体字数目标；"
+        "若与事实完整性冲突，优先完整保留 protected_facts。"
         "immutable_context 中的项目、任务名称、结构状态等字段只用于理解上下文，"
         "不得复制、改写或作为返回字段。不得生成标题编号或 Word 格式。"
         "不得新增、删除、篡改或错误归属 protected_facts 中的指标、数字、日期、"
@@ -97,7 +188,7 @@ def _messages(
         '只输出 JSON 对象，格式为 {"blocks":[{"block_id":"...","text":"..."}]}。'
     )
     user = json.dumps(
-        {"mode": mode.value, "instruction": instruction, "blocks": source},
+        {"mode": mode.value, "mode_contract": contract, "blocks": source},
         ensure_ascii=False,
     )
     return {"role": "system", "content": system}, {"role": "user", "content": user}
@@ -108,12 +199,14 @@ def _correction_messages(
     blocks: Sequence[ContentBlock],
     candidates: dict[str, str],
     results: dict[str, ValidationResult],
+    mode: ContentMode,
+    custom_instruction: str | None,
 ) -> tuple[dict[str, str], dict[str, str]]:
     payload = []
     for block in blocks:
         payload.append(
             {
-                **_request_block(prepared, block),
+                **_request_block(prepared, block, mode),
                 "unsafe_candidate": candidates[block.block_id],
                 "conflicts": [issue.message for issue in results[block.block_id].issues],
             }
@@ -123,7 +216,14 @@ def _correction_messages(
         "使其与 editable_text 和 protected_facts 一致；不得修改 immutable_context，"
         "不得添加新事实。每个 block_id 只返回一次，只输出约定的 JSON 对象。"
     )
-    user = json.dumps({"blocks": payload}, ensure_ascii=False)
+    user = json.dumps(
+        {
+            "mode": mode.value,
+            "mode_contract": _mode_contract(mode, custom_instruction),
+            "blocks": payload,
+        },
+        ensure_ascii=False,
+    )
     return {"role": "system", "content": system}, {"role": "user", "content": user}
 
 
@@ -259,7 +359,15 @@ class LLMService:
             correction_attempted = {block.block_id for block in conflicts}
             try:
                 response = client.complete(
-                    _correction_messages(prepared, conflicts, candidates, validations), config.model
+                    _correction_messages(
+                        prepared,
+                        conflicts,
+                        candidates,
+                        validations,
+                        selected_mode,
+                        custom_instruction,
+                    ),
+                    config.model,
                 )
                 corrected = _decode_response(response, tuple(block.block_id for block in conflicts))
             except (LLMResponseError, RuntimeError):

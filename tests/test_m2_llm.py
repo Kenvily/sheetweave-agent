@@ -93,6 +93,29 @@ def test_llm_modes_preserve_ids_sources_and_facts(tmp_path: Path, mode: str) -> 
     assert all(block.mode == mode for block in result.blocks)
 
 
+def test_preset_modes_send_distinct_writing_contracts_and_length_targets(
+    tmp_path: Path,
+) -> None:
+    prepared = _prepared(tmp_path)
+    contracts = {}
+    targets = {}
+
+    for mode in ("polish", "concise", "expand"):
+        client = FakeClient()
+        _service(client).process(prepared, mode)
+        request = json.loads(client.calls[0][0][-1]["content"])
+        contracts[mode] = request["mode_contract"]
+        targets[mode] = request["blocks"][0]["length_target"]
+
+    assert "85%～115%" in contracts["polish"]["length_rule"]
+    assert "50%～75%" in contracts["concise"]["length_rule"]
+    assert "120%～160%" in contracts["expand"]["length_rule"]
+    assert contracts["polish"]["organization"] != contracts["concise"]["organization"]
+    assert contracts["concise"]["required_actions"] != contracts["expand"]["required_actions"]
+    assert targets["concise"]["maximum_chars"] < targets["polish"]["minimum_chars"]
+    assert targets["expand"]["minimum_chars"] > targets["polish"]["maximum_chars"]
+
+
 def test_custom_mode_passes_instruction_and_requires_it(tmp_path: Path) -> None:
     prepared = _prepared(tmp_path)
     client = FakeClient()
@@ -101,7 +124,8 @@ def test_custom_mode_passes_instruction_and_requires_it(tmp_path: Path) -> None:
     result = service.process(prepared, "custom", custom_instruction="按结论和动作整理")
 
     request = json.loads(client.calls[0][0][-1]["content"])
-    assert request["instruction"] == "按结论和动作整理"
+    assert request["mode_contract"]["custom_instruction"] == "按结论和动作整理"
+    assert "length_target" not in request["blocks"][0]
     assert all(block.mode == "custom" for block in result.blocks)
 
     with pytest.raises(ValueError, match="必须填写处理要求"):
@@ -286,6 +310,12 @@ def test_prompt_exposes_only_editable_text_and_readonly_context(tmp_path: Path) 
         "editable_text",
         "immutable_context",
         "protected_facts",
+        "length_target",
+    }
+    assert set(payload["length_target"]) == {
+        "source_chars",
+        "minimum_chars",
+        "maximum_chars",
     }
     assert "text" not in payload
     assert payload["editable_text"] == prepared.blocks[0].original_text

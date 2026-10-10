@@ -122,6 +122,7 @@ button:hover { filter: brightness(0.92); }
 .meta { margin: 7px 0; color: var(--ink); font-size: 0.88rem; line-height: 1.6; }
 code { padding: 2px 4px; border-radius: 4px; background: #f0f2f3; font-size: 0.78rem; }
 .warnings { padding: 11px 11px 11px 30px; color: #725016; background: #fff8e8; font-size: 0.88rem; }
+.status-tag { color: #725016; font-size: 0.78rem; font-weight: 700; white-space: nowrap; }
 .table-wrap { margin-top: 15px; overflow: auto; border: 1px solid var(--line); border-radius: 8px; }
 table { width: 100%; border-collapse: collapse; font-size: 0.8rem; }
 th, td { padding: 9px 10px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; white-space: pre-wrap; }

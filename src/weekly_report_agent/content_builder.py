@@ -19,7 +19,7 @@ def build_content_blocks(source: ParsedInput, preset: RulePreset) -> tuple[Conte
     """Apply section/group rules while preserving complete source relationships."""
     blocks: list[ContentBlock] = []
     for section in preset.sections:
-        grouped: OrderedDict[str, list[tuple[str, str]]] = OrderedDict()
+        grouped: OrderedDict[tuple[str, bool], list[tuple[str, str]]] = OrderedDict()
         for record in source.sources:
             text = record.fields.get(section.source_field, "").strip()
             if not text:
@@ -29,8 +29,9 @@ def build_content_blocks(source: ParsedInput, preset: RulePreset) -> tuple[Conte
                 if section.group_by == "project"
                 else record.source_id
             )
-            grouped.setdefault(group_key, []).append((record.source_id, text))
-        for group_key, values in grouped.items():
+            editable = section.llm_editable and not record.historical_completed
+            grouped.setdefault((group_key, editable), []).append((record.source_id, text))
+        for (group_key, editable), values in grouped.items():
             source_ids = tuple(source_id for source_id, _text in values)
             original_text = "\n".join(text for _source_id, text in values)
             display_group = group_key
@@ -46,7 +47,7 @@ def build_content_blocks(source: ParsedInput, preset: RulePreset) -> tuple[Conte
                     source_ids=source_ids,
                     original_text=original_text,
                     source_field=section.source_field,
-                    llm_editable=section.llm_editable,
+                    llm_editable=editable,
                 )
             )
     return tuple(blocks)
