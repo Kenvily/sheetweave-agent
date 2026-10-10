@@ -58,6 +58,7 @@ def process_report(
                 block,
                 generated_text=None,
                 mode=ContentMode.ORIGINAL.value,
+                validation_level="pass",
                 validation_warnings=(),
             )
             for block in prepared.blocks

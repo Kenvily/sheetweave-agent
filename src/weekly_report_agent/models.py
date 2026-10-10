@@ -96,6 +96,7 @@ class SourceRecord:
     fields: dict[str, str]
     original_text: str
     raw_values: tuple[str, ...] = ()
+    historical_completed: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -127,9 +128,12 @@ class ContentBlock:
     group_key: str
     source_ids: tuple[str, ...]
     original_text: str
+    source_field: str = ""
+    llm_editable: bool = True
     generated_text: str | None = None
     edited_text: str | None = None
     mode: str = "original"
+    validation_level: str = "pass"
     validation_warnings: tuple[str, ...] = ()
 
     @property
@@ -137,7 +141,7 @@ class ContentBlock:
         """Return edited, generated, or original text in precedence order."""
         if self.edited_text is not None:
             return self.edited_text
-        if self.generated_text is not None:
+        if self.generated_text is not None and self.validation_level == "pass":
             return self.generated_text
         return self.original_text
 

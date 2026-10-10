@@ -114,3 +114,34 @@ def test_web_generates_general_xlsx_docx() -> None:
     assert "通用周报" in document
     assert "1. 本周工作" in document
     assert "1.1. 项目乙" in document
+
+
+def test_input_options_discovers_xlsx_sheets(tmp_path: Path) -> None:
+    xlsx = tmp_path / "options.xlsx"
+    workbook = Workbook()
+    first = workbook.active
+    first.title = "周报一"
+    first.append(["项目", "本周工作"])
+    first.append(["项目甲", "完成验证"])
+    second = workbook.create_sheet("周报二")
+    second.append(["项目", "本周工作"])
+    second.append(["项目乙", "完成复核"])
+    workbook.save(xlsx)
+    workbook.close()
+
+    response = _client().post(
+        "/input-options",
+        data={
+            "csv_file": (io.BytesIO(xlsx.read_bytes()), "周报.xlsx"),
+            "preset": "general",
+            "sheet": "周报二",
+        },
+        content_type="multipart/form-data",
+    )
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload["sheets"] == ["周报一", "周报二"]
+    assert payload["selected_sheet"] == "周报二"
+    assert payload["weeks"] == []
+    assert payload["section_default"] == 1

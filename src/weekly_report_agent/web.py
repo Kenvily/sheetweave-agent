@@ -12,12 +12,14 @@ from datetime import date
 from pathlib import Path
 from xml.etree import ElementTree as ET
 
-from flask import Flask, render_template, request, send_file
+from flask import Flask, jsonify, redirect, render_template, request, send_file, url_for
 from werkzeug.datastructures import FileStorage
 from werkzeug.exceptions import RequestEntityTooLarge
 
+from .input_parser import inspect_input_options
 from .llm import (
     MODE_LABELS,
+    MODE_OPTION_LABELS,
     ContentMode,
     LLMClientError,
     LLMConfigurationError,
@@ -28,7 +30,8 @@ from .llm import (
 from .llm.config import DEFAULT_MODEL, DEFAULT_MODELS
 from .planner import validate_section_number
 from .rules import RulePreset, list_rule_presets, load_rule_preset
-from .service import generate_report, prepare_report, process_report
+from .service import generate_report, prepare_report, process_report, render_prepared_report
+from .web_sessions import SnapshotStore
 
 DEFAULT_TEMPLATE = Path("data/研发三部周报模板.docx")
 DOCX_MIME_TYPE = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
@@ -88,16 +91,24 @@ def _require_external_consent(mode: ContentMode) -> None:
 def create_app(
     template_path: Path | None = None,
     llm_service: LLMService | None = None,
+    snapshot_store: SnapshotStore | None = None,
 ) -> Flask:
     """Create and configure the weekly report web application."""
     app = Flask(__name__)
     configured_template = template_path or Path(
         os.environ.get("WEEKLY_REPORT_TEMPLATE", DEFAULT_TEMPLATE)
     )
+    snapshot_root = Path(
+        os.environ.get(
+            "WEEKLY_REPORT_SNAPSHOT_DIR",
+            str(Path(tempfile.gettempdir()) / "weekly-report-agent-snapshots"),
+        )
+    )
     app.config.update(
         MAX_CONTENT_LENGTH=MAX_UPLOAD_SIZE,
         REPORT_TEMPLATE_PATH=configured_template.resolve(),
         LLM_SERVICE=llm_service,
+        SNAPSHOT_STORE=snapshot_store or SnapshotStore(snapshot_root),
     )
 
     def llm_page_settings() -> tuple[tuple[str, ...], str, bool]:
@@ -117,6 +128,7 @@ def create_app(
         status: int = 200,
         prepared=None,
         selected_preset: RulePreset | None = None,
+        snapshot_token: str | None = None,
     ):
         models, default_model, llm_available = llm_page_settings()
         default_mode = ContentMode.POLISH.value if llm_available else ContentMode.ORIGINAL.value
@@ -130,7 +142,8 @@ def create_app(
                 presets=list_rule_presets(),
                 prepared=prepared,
                 selected_preset=selected_preset,
-                content_modes=tuple((mode.value, MODE_LABELS[mode]) for mode in ContentMode),
+                snapshot_token=snapshot_token,
+                content_modes=tuple((mode.value, MODE_OPTION_LABELS[mode]) for mode in ContentMode),
                 mode_labels={mode.value: label for mode, label in MODE_LABELS.items()},
                 selected_mode=request.form.get("content_mode", default_mode),
                 models=models,
@@ -148,6 +161,15 @@ def create_app(
         upload.save(input_path)
         return input_path
 
+    def selected_template(workdir: Path) -> Path:
+        template_upload = request.files.get("template_file")
+        if template_upload is None or not template_upload.filename:
+            return Path(app.config["REPORT_TEMPLATE_PATH"])
+        _require_extension(template_upload.filename, {".docx"}, "报告模板")
+        path = workdir / "template.docx"
+        template_upload.save(path)
+        return path
+
     def process_options() -> tuple[ContentMode, str | None, str | None]:
         mode = _selected_mode()
         _require_external_consent(mode)
@@ -159,6 +181,36 @@ def create_app(
     def index():
         return show_form()
 
+    @app.post("/input-options")
+    def input_options():
+        """Inspect a temporary upload and return selectable Sheet/week metadata."""
+        upload = _data_upload()
+        try:
+            if upload is None:
+                raise ValueError("请选择周报 CSV 或 XLSX 文件。")
+            preset = load_rule_preset(request.form.get("preset", "rd3"))
+            with tempfile.TemporaryDirectory(prefix="weekly-report-options-") as directory:
+                input_path = save_input(upload, Path(directory))
+                options = inspect_input_options(
+                    input_path,
+                    preset,
+                    sheet=request.form.get("sheet", "").strip() or None,
+                )
+            return jsonify(
+                sheets=options.sheets,
+                selected_sheet=options.selected_sheet,
+                weeks=options.weeks,
+                default_week=options.default_week,
+                section_default=preset.document.heading_start_default,
+            )
+        except (FileNotFoundError, OSError, ValueError, zipfile.BadZipFile) as exc:
+            return jsonify(error=str(exc)), 400
+
+    @app.get("/preview")
+    def preview_entry():
+        """Return stale or directly opened preview URLs to the upload form."""
+        return redirect(url_for("index"))
+
     @app.post("/preview")
     def preview():
         upload = _data_upload()
@@ -166,9 +218,12 @@ def create_app(
             if upload is None:
                 raise ValueError("请选择周报 CSV 或 XLSX 文件。")
             preset = load_rule_preset(request.form.get("preset", "rd3"))
+            report_date = _parse_date(request.form.get("report_date", ""))
+            section_number = _parse_section_number(request.form.get("section_number", ""), preset)
             mode, instruction, model = process_options()
             with tempfile.TemporaryDirectory(prefix="weekly-report-preview-") as directory:
-                input_path = save_input(upload, Path(directory))
+                workdir = Path(directory)
+                input_path = save_input(upload, workdir)
                 prepared, preset = prepare_report(
                     input_path,
                     preset_id=preset.id,
@@ -184,7 +239,24 @@ def create_app(
                     model=model,
                     llm_service=app.config.get("LLM_SERVICE"),
                 )
-            return show_form(prepared=prepared, selected_preset=preset)
+                output_path = workdir / "report.docx"
+                render_prepared_report(
+                    prepared,
+                    preset,
+                    selected_template(workdir),
+                    output_path,
+                    report_date,
+                    section_number,
+                )
+                filename = f"{preset.name}-{report_date:%Y%m%d}.docx"
+                snapshot_token = app.config["SNAPSHOT_STORE"].create(
+                    output_path.read_bytes(), filename
+                )
+            return show_form(
+                prepared=prepared,
+                selected_preset=preset,
+                snapshot_token=snapshot_token,
+            )
         except (
             FileNotFoundError,
             OSError,
@@ -195,10 +267,29 @@ def create_app(
         ) as exc:
             return show_form(error=str(exc), status=400)
 
+    @app.get("/download/<token>")
+    def download_snapshot(token: str):
+        try:
+            snapshot = app.config["SNAPSHOT_STORE"].get(token)
+            return send_file(
+                snapshot.path,
+                mimetype=DOCX_MIME_TYPE,
+                as_attachment=True,
+                download_name=snapshot.download_name,
+                max_age=0,
+            )
+        except ValueError as exc:
+            return show_form(error=str(exc), status=404)
+
+    @app.get("/generate")
+    def generate_entry():
+        """Return directly opened generation URLs to the upload form."""
+        return redirect(url_for("index"))
+
+    @app.post("/")
     @app.post("/generate")
     def generate():
         upload = _data_upload()
-        template_upload = request.files.get("template_file")
         try:
             if upload is None:
                 raise ValueError("请选择周报 CSV 或 XLSX 文件。")
@@ -211,16 +302,9 @@ def create_app(
                 workdir = Path(directory)
                 input_path = save_input(upload, workdir)
                 output_path = workdir / "report.docx"
-
-                selected_template = app.config["REPORT_TEMPLATE_PATH"]
-                if template_upload is not None and template_upload.filename:
-                    _require_extension(template_upload.filename, {".docx"}, "报告模板")
-                    selected_template = workdir / "template.docx"
-                    template_upload.save(selected_template)
-
                 generate_report(
                     input_path=input_path,
-                    template_path=Path(selected_template),
+                    template_path=selected_template(workdir),
                     output_path=output_path,
                     report_date=report_date,
                     requested_week=request.form.get("week", "").strip() or None,
@@ -257,6 +341,8 @@ def create_app(
     @app.errorhandler(RequestEntityTooLarge)
     def upload_too_large(_error: RequestEntityTooLarge):
         limit_mb = MAX_UPLOAD_SIZE // (1024 * 1024)
+        if request.path == url_for("input_options"):
+            return jsonify(error=f"上传文件总大小不能超过 {limit_mb} MB。"), 413
         return show_form(error=f"上传文件总大小不能超过 {limit_mb} MB。", status=413)
 
     return app

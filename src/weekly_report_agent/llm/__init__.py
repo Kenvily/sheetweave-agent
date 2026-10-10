@@ -2,7 +2,14 @@
 
 from .client import LLMClient, LLMClientError, OpenAICompatibleClient
 from .config import LLMConfig, LLMConfigurationError, load_llm_config, validate_llm_config
-from .service import MODE_LABELS, ContentMode, LLMResponseError, LLMService, parse_content_mode
+from .service import (
+    MODE_LABELS,
+    MODE_OPTION_LABELS,
+    ContentMode,
+    LLMResponseError,
+    LLMService,
+    parse_content_mode,
+)
 
 __all__ = [
     "ContentMode",
@@ -13,6 +20,7 @@ __all__ = [
     "LLMResponseError",
     "LLMService",
     "MODE_LABELS",
+    "MODE_OPTION_LABELS",
     "OpenAICompatibleClient",
     "load_llm_config",
     "parse_content_mode",

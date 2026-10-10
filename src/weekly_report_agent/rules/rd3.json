@@ -10,6 +10,11 @@
       "project": ["项目", "项目名称"],
       "detail": ["具体内容", "工作内容", "事项"],
       "status": ["状态", "进度状态"]
+    },
+    "historical_completion": {
+      "enabled": true,
+      "completed_statuses": ["完成", "已完成", "结项", "已结项", "关闭", "已关闭"],
+      "output_text": "已完成"
     }
   },
   "sections": [
@@ -17,6 +22,7 @@
       "id": "weekly_work",
       "title": "大模型产品研发",
       "source_field": "progress",
+      "llm_editable": true,
       "group_by": "row"
     }
   ],
