@@ -31,6 +31,14 @@ class ReportSnapshot:
 
 
 @dataclass(frozen=True, slots=True)
+class PdfSnapshot:
+    """A PDF preview bound to one current report revision."""
+
+    path: Path
+    revision: int
+
+
+@dataclass(frozen=True, slots=True)
 class ReportSession:
     """One editable report work state loaded from the shared session directory."""
 
@@ -46,6 +54,7 @@ class ReportSession:
     revision: int
     template_path: Path
     report_path: Path
+    pdf_path: Path | None
 
 
 class SessionConflictError(ValueError):
@@ -199,6 +208,16 @@ class SnapshotStore:
             finally:
                 fcntl.flock(stream.fileno(), fcntl.LOCK_UN)
 
+    @staticmethod
+    def _valid_pdf_path(directory: Path, revision: int) -> Path | None:
+        path = directory / f"preview-{revision}.pdf"
+        try:
+            if path.is_file() and path.read_bytes()[:5] == b"%PDF-":
+                return path
+        except OSError:
+            pass
+        return None
+
     def load_session(self, token: str) -> ReportSession:
         """Load an unexpired editable report session."""
         directory = self._directory(token)
@@ -226,6 +245,7 @@ class SnapshotStore:
                 revision=revision,
                 template_path=template_path,
                 report_path=report_path,
+                pdf_path=self._valid_pdf_path(directory, revision),
             )
         except (KeyError, TypeError, ValueError) as exc:
             raise ValueError("周报编辑会话无效或已经过期，请重新预览。") from exc
@@ -281,7 +301,42 @@ class SnapshotStore:
             for path in directory.glob("report-*.docx"):
                 if path.name != report_name:
                     path.unlink(missing_ok=True)
+            for path in directory.glob("preview-*.pdf"):
+                path.unlink(missing_ok=True)
         return self.load_session(token)
+
+    def publish_pdf(self, token: str, expected_revision: int, content: bytes) -> PdfSnapshot:
+        """Publish a PDF only when it still matches the current DOCX revision."""
+        if len(content) < 5 or not content.startswith(b"%PDF-"):
+            raise ValueError("PDF 版式预览文件无效。")
+        directory = self._directory(token)
+        with self._locked(directory):
+            state = self._read_state(directory)
+            current_revision = int(state["revision"])
+            if current_revision != expected_revision:
+                raise SessionConflictError(
+                    f"报告已在转换期间更新（当前版本 {current_revision}），"
+                    "旧 PDF 未发布，请重新生成版式预览。"
+                )
+            path = directory / f"preview-{current_revision}.pdf"
+            temporary = directory / f"preview-{current_revision}.tmp"
+            self._write_private(temporary, content)
+            os.replace(temporary, path)
+            for old_path in directory.glob("preview-*.pdf"):
+                if old_path != path:
+                    old_path.unlink(missing_ok=True)
+        return PdfSnapshot(path, current_revision)
+
+    def get_pdf(self, token: str, expected_revision: int | None = None) -> PdfSnapshot:
+        """Return the PDF for the current revision and reject stale preview URLs."""
+        session = self.load_session(token)
+        if expected_revision is not None and expected_revision != session.revision:
+            raise SessionConflictError(
+                f"PDF 预览版本已过期（当前版本 {session.revision}），请重新生成。"
+            )
+        if session.pdf_path is None:
+            raise ValueError("当前版本尚未生成 PDF 版式预览。")
+        return PdfSnapshot(session.pdf_path, session.revision)
 
     def get(self, token: str) -> ReportSnapshot:
         """Resolve the current editable report or a legacy immutable snapshot."""

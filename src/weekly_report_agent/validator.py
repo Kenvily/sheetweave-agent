@@ -9,6 +9,7 @@ from pathlib import Path
 from xml.etree import ElementTree as ET
 
 from .docx_renderer import BODY_KINDS, DOCUMENT_PART, FONT_SETTINGS, HEADING_KINDS, WORD_NS
+from .docx_security import DocxSecurityError, inspect_docx_package
 from .models import ParagraphKind
 from .planner import CIRCLED_NUMBERS, validate_section_number
 
@@ -156,6 +157,36 @@ def _require_numbering_sequence(texts: list[str], section_number: int) -> None:
                 raise ReportValidationError(f"正文三级编号不连续：{text}")
 
 
+def _require_page_layout(root: ET.Element) -> None:
+    """Require a usable final section with explicit page size and margins."""
+    body = root.find(_qn("body"))
+    section = body.find(_qn("sectPr")) if body is not None else None
+    if section is None:
+        raise ReportValidationError("DOCX 缺少文档分节与页面设置。")
+
+    page_size = section.find(_qn("pgSz"))
+    if page_size is None:
+        raise ReportValidationError("DOCX 缺少页面尺寸设置。")
+    for attribute in ("w", "h"):
+        try:
+            value = int(page_size.get(_qn(attribute), ""))
+        except ValueError as exc:
+            raise ReportValidationError("DOCX 页面尺寸设置无效。") from exc
+        if value <= 0:
+            raise ReportValidationError("DOCX 页面尺寸设置无效。")
+
+    margins = section.find(_qn("pgMar"))
+    if margins is None:
+        raise ReportValidationError("DOCX 缺少页边距设置。")
+    for attribute in ("top", "right", "bottom", "left"):
+        try:
+            value = int(margins.get(_qn(attribute), ""))
+        except ValueError as exc:
+            raise ReportValidationError("DOCX 页边距设置无效。") from exc
+        if value < 0:
+            raise ReportValidationError("DOCX 页边距设置无效。")
+
+
 def validate_report(
     path: Path,
     section_number: int = 9,
@@ -168,6 +199,10 @@ def validate_report(
     if not path.is_file():
         raise ReportValidationError(f"报告文件不存在：{path}")
     try:
+        inspect_docx_package(path)
+    except DocxSecurityError as exc:
+        raise ReportValidationError(str(exc)) from exc
+    try:
         with zipfile.ZipFile(path, "r") as package:
             if package.testzip() is not None:
                 raise ReportValidationError("DOCX 压缩包包含损坏条目。")
@@ -177,6 +212,7 @@ def validate_report(
     except (zipfile.BadZipFile, ET.ParseError) as exc:
         raise ReportValidationError(f"DOCX 文件无效：{exc}") from exc
 
+    _require_page_layout(root)
     paragraphs = root.findall(f".//{_qn('body')}/{_qn('p')}")
     texts = [_text(paragraph) for paragraph in paragraphs]
     expected_headings = {

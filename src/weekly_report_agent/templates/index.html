@@ -77,20 +77,10 @@
           </label>
         </div>
 
-        <label class="field">
-          <span>自定义要求（仅自定义模式使用）</span>
-          <textarea name="custom_instruction" rows="3" placeholder="例如：按成果、问题和后续动作整理，不改变任何事实。">{{ form.get('custom_instruction', '') }}</textarea>
+        <label id="custom-instruction-field" class="field"{% if selected_mode != 'custom' %} hidden{% endif %}>
+          <span>自定义要求</span>
+          <textarea name="custom_instruction" rows="3" placeholder="例如：按成果、问题和后续动作整理，不改变任何事实。"{% if selected_mode == 'custom' %} required{% endif %}>{{ form.get('custom_instruction', '') }}</textarea>
         </label>
-
-        <section class="data-notice" aria-label="模型数据说明">
-          <strong>数据处理说明</strong>
-          <p>原文保留不会调用模型。其他模式会将内容块、所属章节和项目名称发送到服务器配置的 DeepSeek 服务；不会发送完整上传文件或 API Key。</p>
-          <p class="service-state">模型服务：{% if llm_available %}已配置{% else %}未配置，仅原文保留可直接使用{% endif %}</p>
-          <label class="consent">
-            <input type="checkbox" name="allow_external" value="yes"{% if form.get('allow_external') == 'yes' %} checked{% endif %}>
-            <span>选择模型模式时，我确认允许发送上述内容</span>
-          </label>
-        </section>
 
         <details>
           <summary>高级适配设置</summary>
@@ -211,8 +201,19 @@
       const week = form?.elements.week;
       const sheet = form?.elements.sheet;
       const sectionNumber = form?.elements.section_number;
+      const contentMode = form?.elements.content_mode;
+      const customInstructionField = document.getElementById("custom-instruction-field");
+      const customInstruction = form?.elements.custom_instruction;
       const optionsStatus = document.getElementById("input-options-status");
       if (!form || !overlay) return;
+
+      const updateCustomInstruction = () => {
+        const isCustom = contentMode.value === "custom";
+        customInstructionField.hidden = !isCustom;
+        customInstruction.required = isCustom;
+      };
+      contentMode.addEventListener("change", updateCustomInstruction);
+      updateCustomInstruction();
 
       let optionsRequest;
       const replaceOptions = (select, values, emptyLabel, selectedValue = "") => {

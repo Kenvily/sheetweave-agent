@@ -17,6 +17,7 @@ from flask import Flask, jsonify, redirect, render_template, request, send_file,
 from werkzeug.datastructures import FileStorage
 from werkzeug.exceptions import RequestEntityTooLarge
 
+from .docx_security import inspect_docx_package
 from .input_parser import inspect_input_options
 from .llm import (
     MODE_LABELS,
@@ -29,6 +30,7 @@ from .llm import (
     parse_content_mode,
 )
 from .llm.config import DEFAULT_MODEL, DEFAULT_MODELS
+from .pdf_preview import PdfPreviewError, PdfPreviewService
 from .planner import validate_section_number
 from .rules import RulePreset, list_rule_presets, load_rule_preset
 from .service import (
@@ -106,27 +108,40 @@ def _parse_revision(value: str) -> int:
     return revision
 
 
-def _diff_segments(before: str, after: str) -> tuple[tuple[str, str], ...]:
-    """Return an escaped-by-Jinja character diff without changing either text."""
-    segments: list[tuple[str, str]] = []
-    matcher = difflib.SequenceMatcher(a=before, b=after, autojunk=False)
+def _unified_diff(before: str, after: str) -> tuple[tuple[str, str], ...]:
+    """Return a Git-style, line-oriented diff without changing source text."""
+    before_lines = before.splitlines()
+    after_lines = after.splitlines()
+    matcher = difflib.SequenceMatcher(a=before_lines, b=after_lines, autojunk=False)
+    rows: list[tuple[str, str]] = []
+
     for operation, left_start, left_end, right_start, right_end in matcher.get_opcodes():
         if operation == "equal":
-            segments.append(("equal", before[left_start:left_end]))
+            rows.extend(("context", line) for line in before_lines[left_start:left_end])
         elif operation == "delete":
-            segments.append(("delete", before[left_start:left_end]))
+            rows.extend(("removed", line) for line in before_lines[left_start:left_end])
         elif operation == "insert":
-            segments.append(("insert", after[right_start:right_end]))
+            rows.extend(("added", line) for line in after_lines[right_start:right_end])
         else:
-            segments.append(("delete", before[left_start:left_end]))
-            segments.append(("insert", after[right_start:right_end]))
-    return tuple(segment for segment in segments if segment[1])
+            rows.extend(("removed", line) for line in before_lines[left_start:left_end])
+            rows.extend(("added", line) for line in after_lines[right_start:right_end])
+    return tuple(rows)
+
+
+def _unified_diff_header(before: str, after: str) -> str:
+    """Return the single full-content hunk header used by the Web diff."""
+    old_count = len(before.splitlines())
+    new_count = len(after.splitlines())
+    old_start = 1 if old_count else 0
+    new_start = 1 if new_count else 0
+    return f"@@ -{old_start},{old_count} +{new_start},{new_count} @@"
 
 
 def create_app(
     template_path: Path | None = None,
     llm_service: LLMService | None = None,
     snapshot_store: SnapshotStore | None = None,
+    pdf_preview_service: PdfPreviewService | None = None,
 ) -> Flask:
     """Create and configure the weekly report web application."""
     app = Flask(__name__)
@@ -144,6 +159,7 @@ def create_app(
         REPORT_TEMPLATE_PATH=configured_template.resolve(),
         LLM_SERVICE=llm_service,
         SNAPSHOT_STORE=snapshot_store or SnapshotStore(snapshot_root),
+        PDF_PREVIEW_SERVICE=pdf_preview_service or PdfPreviewService.from_environment(),
     )
 
     def llm_page_settings() -> tuple[tuple[str, ...], str, bool]:
@@ -166,7 +182,7 @@ def create_app(
         snapshot_token: str | None = None,
     ):
         models, default_model, llm_available = llm_page_settings()
-        default_mode = ContentMode.POLISH.value if llm_available else ContentMode.ORIGINAL.value
+        default_mode = ContentMode.ORIGINAL.value
         return (
             render_template(
                 "index.html",
@@ -201,6 +217,7 @@ def create_app(
             "edited": "人工编辑已保存，文档预览与下载文件已同步更新。",
             "selected": "有效内容版本已更新，文档预览与下载文件已同步更新。",
             "regenerated": "所选内容块已重新生成，其他内容未改变。",
+            "pdf": "当前版本的 PDF 版式预览已生成。",
         }
         return (
             render_template(
@@ -210,7 +227,8 @@ def create_app(
                 preset=preset,
                 error=error,
                 notice=notices.get(notice, notice),
-                diff_segments=_diff_segments,
+                unified_diff=_unified_diff,
+                unified_diff_header=_unified_diff_header,
                 content_modes=tuple(
                     (mode.value, MODE_OPTION_LABELS[mode])
                     for mode in ContentMode
@@ -219,6 +237,7 @@ def create_app(
                 models=models,
                 default_model=default_model,
                 llm_available=llm_available,
+                pdf_available=app.config["PDF_PREVIEW_SERVICE"].available,
             ),
             status,
         )
@@ -284,11 +303,11 @@ def create_app(
         _require_extension(template_upload.filename, {".docx"}, "报告模板")
         path = workdir / "template.docx"
         template_upload.save(path)
+        inspect_docx_package(path)
         return path
 
     def process_options() -> tuple[ContentMode, str | None, str | None]:
         mode = _selected_mode()
-        _require_external_consent(mode)
         instruction = request.form.get("custom_instruction", "").strip() or None
         model = request.form.get("model", "").strip() or None
         return mode, instruction, model
@@ -469,6 +488,43 @@ def create_app(
             ET.ParseError,
         ) as exc:
             return mutation_error(token, exc, 400)
+
+    @app.post("/workspace/<token>/pdf")
+    def generate_workspace_pdf(token: str):
+        """Generate an optional PDF preview for exactly one current revision."""
+        try:
+            session = current_session(token)
+            service = app.config["PDF_PREVIEW_SERVICE"]
+            with tempfile.TemporaryDirectory(prefix="weekly-report-pdf-route-") as directory:
+                output_path = Path(directory) / "preview.pdf"
+                service.convert(session.report_path, output_path)
+                app.config["SNAPSHOT_STORE"].publish_pdf(
+                    token, session.revision, output_path.read_bytes()
+                )
+            return redirect(url_for("workspace", token=token, updated="pdf"))
+        except SessionConflictError as exc:
+            return mutation_error(token, exc, 409)
+        except (OSError, PdfPreviewError, ValueError) as exc:
+            return mutation_error(token, exc, 400)
+
+    @app.get("/workspace/<token>/pdf")
+    def workspace_pdf(token: str):
+        """Serve only the PDF bound to the current report revision."""
+        try:
+            revision_value = request.args.get("revision", "").strip()
+            expected_revision = _parse_revision(revision_value) if revision_value else None
+            snapshot = app.config["SNAPSHOT_STORE"].get_pdf(token, expected_revision)
+            return send_file(
+                snapshot.path,
+                mimetype="application/pdf",
+                as_attachment=False,
+                download_name=f"weekly-report-preview-{snapshot.revision}.pdf",
+                max_age=0,
+            )
+        except SessionConflictError as exc:
+            return mutation_error(token, exc, 409)
+        except ValueError as exc:
+            return mutation_error(token, exc, 404)
 
     @app.get("/download/<token>")
     def download_snapshot(token: str):

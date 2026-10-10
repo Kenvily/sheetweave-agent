@@ -11,7 +11,7 @@
 - 保留 CSV 物理行号或 XLSX Sheet/行号，为来源记录和内容块生成稳定 ID。
 - Web 提供三栏审核工作区：左栏完整原始行、中栏内容版本与审核操作、右栏当前有效内容预览。
 - 来源行与内容块支持双向定位和高亮，兼容一行关联多块、多行合并一块。
-- 支持原文/模型候选/人工编辑版本切换、只读 Diff、单块重新生成和事实冲突回退。
+- 中栏只展示当前生效内容；每个内容块最多提供一个以原文为基准的 Git 风格单栏 Unified Diff；上下文行保持原样，仅用 `-` 红色删除行和 `+` 绿色新增行突出变化，并支持版本恢复、单块重新生成和事实冲突回退。
 - 支持原文保留、规范润色、精简总结、详细整理和自定义要求五种内容模式。
 - LLM 仅能改写所选周次的工作内容；项目、任务、结构状态和日期字段只作为只读上下文。
 - 对模型版本、指标、百分比、百分点、数量、日期和任务状态执行归一化分级校验。
@@ -24,7 +24,7 @@
 
 ## 当前开发阶段
 
-ROADMAP 的 M0～M3 已完成：现有 CLI/Web 和 DOCX 规则链路已有回归保护；CSV/XLSX、规则预设、来源追溯、五种内容模式和分级事实校验均可用；三栏审核、双向高亮、Diff、人工编辑、版本选择、单块重生成及跨请求临时会话已形成闭环。下一阶段是 M4：继续完善多模板体验、DOCX 格式检查和可选 PDF 版式预览；匿名统计与完整网页帮助属于 M5。
+ROADMAP 的 M0～M3 已完成。M4 已完成第一阶段增强：DOCX 模板和输出会检查必要部件、ZIP 安全边界、核心 XML、页面尺寸、页边距、编号及段落样式；三栏工作区可在 LibreOffice 可用时按当前 revision 生成 PDF 真实版式预览。多模板目前保留为高级适配设置中的简单上传与字段映射，完整的多模板配置体验仍待完善；匿名统计与完整网页帮助属于 M5。
 
 ## 规则与格式
 
@@ -54,7 +54,9 @@ ROADMAP 的 M0～M3 已完成：现有 CLI/Web 和 DOCX 规则链路已有回归
 - `src/weekly_report_agent/normalizer.py`：术语、正式称呼和相对星期规范化。
 - `src/weekly_report_agent/planner.py`：规则化正文层级和报告编号规划。
 - `src/weekly_report_agent/docx_renderer.py`：基于模板 OOXML 渲染 DOCX。
-- `src/weekly_report_agent/validator.py`：编号、措辞和 DOCX 排版校验。
+- `src/weekly_report_agent/docx_security.py`：DOCX 包路径、体积、必要部件和核心 XML 安全检查。
+- `src/weekly_report_agent/validator.py`：编号、措辞、页面设置和 DOCX 排版校验。
+- `src/weekly_report_agent/pdf_preview.py`：可选 LibreOffice headless PDF 版式转换。
 - `src/weekly_report_agent/cli.py`：命令行入口。
 - `src/weekly_report_agent/web.py`：Web 上传、三栏审核、编辑、重生成与下载入口。
 - `src/weekly_report_agent/web_sessions.py`：两小时临时会话、revision 并发保护及当前 DOCX 快照。
@@ -127,14 +129,23 @@ python -m weekly_report_agent.web --host 0.0.0.0 --port 18989
 1. 上传 CSV/XLSX，并选择 `研发三部周报` 或 `通用周报`。
 2. 选择文件后，页面自动读取可选工作表和周次；起始章节号留空时使用规则默认值，也可直接输入。
 3. 点击“预览来源与内容”进入三栏工作区；点击左侧来源行或中间内容块可双向定位。
-4. 在中栏查看原文、模型候选和 Diff，可保存人工编辑、选择有效版本，或只重新生成当前块。
-5. 从右栏下载当前 revision 的 DOCX；会话保留 2 小时，刷新页面无需重新选择文件。
+4. 在中栏审核当前生效内容；发生模型改写或人工编辑时，可展开唯一的 Git 风格单栏 Unified Diff。上下文行保持原样，删除行以红色 `-` 标记，新增行以绿色 `+` 标记；也可保存编辑、恢复原文或只重新生成当前块。
+5. 从右栏下载当前 revision 的 DOCX；若服务器安装了 LibreOffice，也可手动生成同一 revision 的 PDF 版式预览。会话保留 2 小时，刷新页面无需重新选择文件。
 
 人工编辑会再次执行事实校验：校验通过时自动采用；待确认版本需显式选择；严重冲突版本保留供核对，但不能直接导出。若多个标签页同时修改，旧 revision 会收到 `409` 提示，不会静默覆盖新内容。单块重生成不会修改其他块；已有人工编辑时必须明确勾选覆盖。
 
-“高级适配设置”仅用于自定义 DOCX 模板和字段映射，以适配不同周报结构。
+“高级适配设置”当前提供自定义 DOCX 模板上传和字段映射。上传模板会先执行受限 ZIP/DOCX 检查；现阶段仍由已有 OOXML 渲染器替换正文，不承诺兼容任意复杂模板布局。
 
-选择非原文模式时还需选择服务器允许的模型，并勾选数据外发确认。页面不会显示或保存 API Key。上传原文件在请求完成后删除；预览生成的 DOCX 快照在本机受限临时目录保留 2 小时并自动清理；请求总大小限制为 16 MB。如需维护 WSL 局域网访问，请参阅 [WSL 局域网访问与端口转发维护](docs/wsl-lan-access.md)。
+PDF 预览是可选能力，不影响 DOCX 生成和下载。安装 LibreOffice 后通常可自动识别 `soffice`；也可在 `.env` 中配置：
+
+```dotenv
+LIBREOFFICE_PATH=/usr/bin/soffice
+PDF_PREVIEW_TIMEOUT=45
+```
+
+生成 PDF 后可在右栏通过 HTML/PDF 页签随时切换，两种预览基于同一 revision。未安装 LibreOffice 时页面继续显示 HTML 快速预览。人工编辑、采用版本或单块重生成后，旧 PDF 会自动失效，需针对新的 revision 手动重新生成。
+
+选择非原文模式时还需选择服务器允许的模型。页面不会显示或保存 API Key；是否允许通过外部模型处理周报数据，应由部署方按公司数据管理要求统一控制。上传原文件在请求完成后删除；预览生成的 DOCX 快照在本机受限临时目录保留 2 小时并自动清理；请求总大小限制为 16 MB。如需维护 WSL 局域网访问，请参阅 [WSL 局域网访问与端口转发维护](docs/wsl-lan-access.md)。
 
 ## 命令行
 

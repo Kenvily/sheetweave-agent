@@ -6,7 +6,7 @@ from collections.abc import Sequence
 from pathlib import Path
 
 from weekly_report_agent.llm import LLMConfig, LLMService
-from weekly_report_agent.web import DOCX_MIME_TYPE, create_app
+from weekly_report_agent.web import DOCX_MIME_TYPE, _unified_diff, create_app
 from weekly_report_agent.web_sessions import SnapshotStore
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -102,6 +102,27 @@ def _document_text(response) -> str:
         return package.read("word/document.xml").decode("utf-8")
 
 
+def test_unified_diff_only_marks_changed_physical_line() -> None:
+    rows = _unified_diff(
+        "第一行保持不变\n第二行原内容\n第三行保持不变",
+        "第一行保持不变\n第二行修改后内容\n第三行保持不变",
+    )
+
+    assert rows == (
+        ("context", "第一行保持不变"),
+        ("removed", "第二行原内容"),
+        ("added", "第二行修改后内容"),
+        ("context", "第三行保持不变"),
+    )
+
+    inserted = _unified_diff("第一行\n第三行", "第一行\n第二行\n第三行")
+    assert inserted == (
+        ("context", "第一行"),
+        ("added", "第二行"),
+        ("context", "第三行"),
+    )
+
+
 def test_workspace_has_three_columns_and_complete_bidirectional_ids(tmp_path: Path) -> None:
     app, store = _application(tmp_path)
     response, token = _preview(app.test_client())
@@ -136,8 +157,12 @@ def test_workspace_refresh_preserves_session_and_diff_is_read_only(tmp_path: Pat
 
     assert refreshed.status_code == 200
     assert "周报审核工作区" in refreshed.text
-    assert "查看原文与模型候选 Diff" in refreshed.text
-    assert "<ins>" in refreshed.text
+    assert refreshed.text.count("查看变更对比") == 1
+    assert 'class="unified-diff"' in refreshed.text
+    assert 'class="diff-line removed"' in refreshed.text
+    assert 'class="diff-line added"' in refreshed.text
+    assert "查看原文与模型候选 Diff" not in refreshed.text
+    assert "查看模型/原文与人工编辑 Diff" not in refreshed.text
     assert preview.text.count("表述已整理") >= 1
     assert after == before
     assert len(fake.calls) == 1
@@ -162,6 +187,10 @@ def test_safe_manual_edit_persists_and_updates_downloaded_docx(tmp_path: Path) -
     assert current.prepared.block_by_id(block.block_id).effective_text == edited
     refreshed = client.get(f"/workspace/{token}")
     assert edited in refreshed.text
+    assert refreshed.text.count("查看变更对比") == 1
+    assert refreshed.text.count('class="diff-line removed"') == 1
+    assert refreshed.text.count('class="diff-line added"') == 1
+    assert '<div class="version-heading"><b>原文</b>' not in refreshed.text
     document = _document_text(client.get(f"/download/{token}"))
     assert edited in document
 
