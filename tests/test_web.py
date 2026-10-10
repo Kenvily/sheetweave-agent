@@ -21,8 +21,9 @@ def test_web_page_is_simple_and_has_rule_parameters() -> None:
     assert "研发周报生成器" in response.text
     assert 'name="csv_file"' in response.text
     assert 'name="section_number"' in response.text
-    assert "DeepSeek" not in response.text
-    assert "API Key" not in response.text
+    assert "数据处理说明" in response.text
+    assert 'name="content_mode"' in response.text
+    assert 'name="api_key"' not in response.text.lower()
 
 
 def test_web_generates_download_with_custom_section_number() -> None:

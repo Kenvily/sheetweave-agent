@@ -7,8 +7,16 @@ from collections import OrderedDict
 from dataclasses import dataclass, field
 from datetime import date
 
-from .models import ParagraphKind, ReportParagraph, ReportPlan, WeeklyData, WeeklyItem
+from .models import (
+    ParagraphKind,
+    PreparedReport,
+    ReportParagraph,
+    ReportPlan,
+    WeeklyData,
+    WeeklyItem,
+)
 from .normalizer import normalize_report_text
+from .rules import RulePreset
 
 TERMINAL_PUNCTUATION = re.compile(r"[。；：！？.!?]$")
 TOP_LEVEL_NUMBER = re.compile(r"^(\d+)[、.．]\s*(.*)$")
@@ -202,5 +210,67 @@ def build_report_plan(data: WeeklyData, report_date: date, section_number: int =
         source_label=data.label,
         section_number=section_number,
         item_count=len(data.items),
+        paragraphs=tuple(paragraphs),
+    )
+
+
+def build_prepared_report_plan(
+    prepared: PreparedReport,
+    preset: RulePreset,
+    report_date: date,
+    section_number: int | None = None,
+) -> ReportPlan:
+    """Build a report plan from traceable blocks using a validated preset."""
+    if not isinstance(prepared, PreparedReport) or not isinstance(preset, RulePreset):
+        raise TypeError("prepared 和 preset 类型无效。")
+    start = validate_section_number(
+        section_number if section_number is not None else preset.document.heading_start_default
+    )
+    paragraphs = [
+        ReportParagraph(preset.document.report_title, ParagraphKind.TITLE),
+        ReportParagraph(report_date.strftime("%Y%m%d"), ParagraphKind.DATE),
+    ]
+    active_sections = [
+        (section, [block for block in prepared.blocks if block.section_id == section.id])
+        for section in preset.sections
+    ]
+    active_sections = [(section, blocks) for section, blocks in active_sections if blocks]
+    for section_offset, (section, section_blocks) in enumerate(active_sections):
+        section_number_value = start + section_offset
+        validate_section_number(section_number_value)
+        paragraphs.append(
+            ReportParagraph(
+                f"{section_number_value}. {section.title}",
+                ParagraphKind.HEADING_1,
+            )
+        )
+        groups: OrderedDict[str, list[object]] = OrderedDict()
+        for block in section_blocks:
+            groups.setdefault(block.group_key, []).append(block)
+        for group_index, (group_key, blocks) in enumerate(groups.items(), start=1):
+            paragraphs.append(
+                ReportParagraph(
+                    f"{section_number_value}.{group_index}. "
+                    f"{normalize_report_text(group_key, report_date)}",
+                    ParagraphKind.HEADING_2,
+                )
+            )
+            for block_index, block in enumerate(blocks, start=1):
+                paragraphs.append(
+                    ReportParagraph(
+                        f"{section_number_value}.{group_index}.{block_index}. {section.title}内容",
+                        ParagraphKind.HEADING_3,
+                    )
+                )
+                paragraphs.extend(
+                    _body_paragraphs(normalize_report_text(block.effective_text, report_date))
+                )
+    if len(paragraphs) == 2:
+        raise ValueError("当前规则没有生成任何有效内容块。")
+    return ReportPlan(
+        report_date=report_date,
+        source_label=prepared.source.source_label,
+        section_number=start,
+        item_count=len(prepared.source.sources),
         paragraphs=tuple(paragraphs),
     )

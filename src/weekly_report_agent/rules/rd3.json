@@ -1,0 +1,28 @@
+{
+  "id": "rd3",
+  "name": "研发三部周报",
+  "schema_version": 1,
+  "input": {
+    "layout": "weekly_matrix",
+    "header_rows": 2,
+    "required_fields": ["project", "detail"],
+    "column_aliases": {
+      "project": ["项目", "项目名称"],
+      "detail": ["具体内容", "工作内容", "事项"],
+      "status": ["状态", "进度状态"]
+    }
+  },
+  "sections": [
+    {
+      "id": "weekly_work",
+      "title": "大模型产品研发",
+      "source_field": "progress",
+      "group_by": "row"
+    }
+  ],
+  "document": {
+    "report_title": "数据科学产品部周报",
+    "template": "研发三部周报模板.docx",
+    "heading_start_default": 9
+  }
+}

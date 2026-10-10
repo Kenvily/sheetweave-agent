@@ -1,0 +1,26 @@
+{
+  "id": "general",
+  "name": "通用周报",
+  "schema_version": 1,
+  "input": {
+    "layout": "records",
+    "header_rows": 1,
+    "required_fields": ["project", "content"],
+    "column_aliases": {
+      "project": ["项目", "项目名称"],
+      "content": ["本周工作", "工作内容", "工作进展"],
+      "issues": ["问题与风险", "问题", "风险"],
+      "next_plan": ["下周计划", "后续计划"]
+    }
+  },
+  "sections": [
+    {"id": "weekly_work", "title": "本周工作", "source_field": "content", "group_by": "project"},
+    {"id": "issues", "title": "问题与风险", "source_field": "issues", "group_by": "project"},
+    {"id": "next_plan", "title": "下周计划", "source_field": "next_plan", "group_by": "project"}
+  ],
+  "document": {
+    "report_title": "通用周报",
+    "template": "研发三部周报模板.docx",
+    "heading_start_default": 1
+  }
+}

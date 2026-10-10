@@ -67,15 +67,14 @@ def _require_style(paragraph: ET.Element, kind: ParagraphKind) -> None:
             raise ReportValidationError(f"正文未首行缩进 2 字符：{text}")
 
 
-def _paragraph_kind(text: str, section_number: int) -> ParagraphKind:
-    escaped = re.escape(str(section_number))
-    if text == f"{section_number}. 大模型产品研发":
+def _paragraph_kind(text: str, report_title: str, expected_headings: set[str]) -> ParagraphKind:
+    if text in expected_headings:
         return ParagraphKind.HEADING_1
-    if re.match(rf"^{escaped}\.\d+\.\d+\.\s", text):
+    if re.match(r"^\d+\.\d+\.\d+\.\s", text):
         return ParagraphKind.HEADING_3
-    if re.match(rf"^{escaped}\.\d+\.\s", text):
+    if re.match(r"^\d+\.\d+\.\s", text):
         return ParagraphKind.HEADING_2
-    if text == "数据科学产品部周报":
+    if text == report_title:
         return ParagraphKind.TITLE
     if re.fullmatch(r"\d{8}", text):
         return ParagraphKind.DATE
@@ -99,31 +98,41 @@ def _require_wording(text: str, kind: ParagraphKind) -> None:
 
 def _require_numbering_sequence(texts: list[str], section_number: int) -> None:
     """Require continuous heading and body numbering within each parent level."""
-    escaped = re.escape(str(section_number))
-    project_index = 0
-    detail_index = 0
+    heading_1_index = section_number - 1
+    heading_2_index = 0
+    heading_3_index = 0
     body_1_index = 0
     body_2_index = 0
     body_3_index = 0
 
     for text in texts:
-        heading_2 = re.match(rf"^{escaped}\.(\d+)\.\s", text)
-        heading_3 = re.match(rf"^{escaped}\.(\d+)\.(\d+)\.\s", text)
+        heading_3 = re.match(r"^(\d+)\.(\d+)\.(\d+)\.\s", text)
+        heading_2 = re.match(r"^(\d+)\.(\d+)\.\s", text)
+        heading_1 = re.match(r"^(\d+)\.\s", text)
         body_1 = re.match(r"^(\d+)、", text)
         body_2 = re.match(r"^（(\d+)）", text)
 
-        if heading_2:
-            project_index += 1
-            if int(heading_2.group(1)) != project_index:
-                raise ReportValidationError(f"二级标题编号不连续：{text}")
-            detail_index = 0
-        elif heading_3:
-            if int(heading_3.group(1)) != project_index:
-                raise ReportValidationError(f"三级标题父级编号不正确：{text}")
-            detail_index += 1
-            if int(heading_3.group(2)) != detail_index:
+        if heading_3:
+            if int(heading_3.group(1)) != heading_1_index:
+                raise ReportValidationError(f"三级标题一级父编号不正确：{text}")
+            if int(heading_3.group(2)) != heading_2_index:
+                raise ReportValidationError(f"三级标题二级父编号不正确：{text}")
+            heading_3_index += 1
+            if int(heading_3.group(3)) != heading_3_index:
                 raise ReportValidationError(f"三级标题编号不连续：{text}")
             body_1_index = body_2_index = body_3_index = 0
+        elif heading_2:
+            if int(heading_2.group(1)) != heading_1_index:
+                raise ReportValidationError(f"二级标题父级编号不正确：{text}")
+            heading_2_index += 1
+            if int(heading_2.group(2)) != heading_2_index:
+                raise ReportValidationError(f"二级标题编号不连续：{text}")
+            heading_3_index = 0
+        elif heading_1:
+            heading_1_index += 1
+            if int(heading_1.group(1)) != heading_1_index:
+                raise ReportValidationError(f"一级标题编号不连续：{text}")
+            heading_2_index = heading_3_index = 0
         elif body_1:
             body_1_index += 1
             if int(body_1.group(1)) != body_1_index:
@@ -140,13 +149,21 @@ def _require_numbering_sequence(texts: list[str], section_number: int) -> None:
             if body_2_index == 0:
                 raise ReportValidationError(f"正文三级编号缺少父级：{text}")
             body_3_index += 1
+            if body_3_index > len(CIRCLED_NUMBERS):
+                raise ReportValidationError("正文三级编号超过支持范围。")
             expected = CIRCLED_NUMBERS[body_3_index - 1]
             if not text.startswith(expected):
                 raise ReportValidationError(f"正文三级编号不连续：{text}")
 
 
-def validate_report(path: Path, section_number: int = 9) -> ValidationResult:
-    """Validate a readable DOCX against all report formatting rules."""
+def validate_report(
+    path: Path,
+    section_number: int = 9,
+    *,
+    report_title: str = "数据科学产品部周报",
+    heading_titles: tuple[str, ...] = ("大模型产品研发",),
+) -> ValidationResult:
+    """Validate a readable DOCX against configured report formatting rules."""
     section_number = validate_section_number(section_number)
     if not path.is_file():
         raise ReportValidationError(f"报告文件不存在：{path}")
@@ -162,15 +179,19 @@ def validate_report(path: Path, section_number: int = 9) -> ValidationResult:
 
     paragraphs = root.findall(f".//{_qn('body')}/{_qn('p')}")
     texts = [_text(paragraph) for paragraph in paragraphs]
-    expected_heading = f"{section_number}. 大模型产品研发"
-    if expected_heading not in texts:
-        raise ReportValidationError(f"报告缺少“{expected_heading}”一级标题。")
+    expected_headings = {
+        f"{section_number + offset}. {title}" for offset, title in enumerate(heading_titles)
+    }
+    missing_headings = expected_headings.difference(texts)
+    if missing_headings:
+        missing = "、".join(sorted(missing_headings))
+        raise ReportValidationError(f"报告缺少一级标题：{missing}。")
 
     _require_numbering_sequence(texts, section_number)
 
     heading_count = 0
     for paragraph, text in zip(paragraphs, texts, strict=True):
-        kind = _paragraph_kind(text, section_number)
+        kind = _paragraph_kind(text, report_title, expected_headings)
         _require_style(paragraph, kind)
         _require_wording(text, kind)
         if kind in HEADING_KINDS:
