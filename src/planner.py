@@ -177,6 +177,11 @@ def _group_by_project(items: tuple[WeeklyItem, ...]) -> list[tuple[str, list[Wee
     return list(projects.items())
 
 
+def build_body_paragraphs(text: str, report_date: date) -> tuple[ReportParagraph, ...]:
+    """Plan the same normalized, numbered body for DOCX and Web previews."""
+    return tuple(_body_paragraphs(normalize_report_text(text, report_date)))
+
+
 def build_report_plan(data: WeeklyData, report_date: date, section_number: int = 9) -> ReportPlan:
     """Create normalized content and a hierarchy beginning at ``section_number``."""
     section_number = validate_section_number(section_number)
@@ -202,8 +207,7 @@ def build_report_plan(data: WeeklyData, report_date: date, section_number: int =
                     ParagraphKind.HEADING_3,
                 )
             )
-            normalized_progress = normalize_report_text(item.progress, report_date)
-            paragraphs.extend(_body_paragraphs(normalized_progress))
+            paragraphs.extend(build_body_paragraphs(item.progress, report_date))
 
     return ReportPlan(
         report_date=report_date,
@@ -262,9 +266,7 @@ def build_prepared_report_plan(
                         ParagraphKind.HEADING_3,
                     )
                 )
-                paragraphs.extend(
-                    _body_paragraphs(normalize_report_text(block.effective_text, report_date))
-                )
+                paragraphs.extend(build_body_paragraphs(block.effective_text, report_date))
     if len(paragraphs) == 2:
         raise ValueError("当前规则没有生成任何有效内容块。")
     return ReportPlan(

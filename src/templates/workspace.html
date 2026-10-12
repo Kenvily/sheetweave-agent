@@ -1,0 +1,379 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>周报审核工作区</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
+</head>
+<body>
+  <main class="workspace-container">
+    <header class="workspace-header">
+      <div>
+        <a class="back-link" href="{{ url_for('index') }}">← 新建周报</a>
+        <h1>周报审核工作区</h1>
+        <div class="workspace-meta" aria-label="当前报告信息">
+          <span>{{ preset.name }}</span>
+          <span>{{ session.report_date }}</span>
+          <span>版本 {{ session.revision }}</span>
+          {% if session.content_mode == 'original' %}<span>原文模式</span>{% endif %}
+        </div>
+      </div>
+      <nav class="workspace-header-actions" aria-label="工作区操作">
+        <a class="header-link" href="{{ url_for('help_page') }}">使用帮助</a>
+        <a class="button-link" href="{{ url_for('download_snapshot', token=session.token) }}">下载当前 DOCX</a>
+      </nav>
+    </header>
+
+    {% if error %}<div class="alert workspace-alert" role="alert">{{ error }}</div>{% endif %}
+    {% if notice %}<div class="success-notice workspace-alert" role="status">{{ notice }}</div>{% endif %}
+
+    <section class="review-grid" aria-label="三栏周报审核工作区">
+      <aside class="review-panel source-panel" aria-label="原始表格">
+        <div class="panel-heading">
+          <h2>来源表格 / 原始表格</h2>
+          <span class="badge">{{ prepared.source.sources|length }} 行参与生成</span>
+        </div>
+        {% if prepared.source.warnings %}
+        <ul class="warnings">{% for warning in prepared.source.warnings %}<li>{{ warning }}</li>{% endfor %}</ul>
+        {% endif %}
+        <div class="source-list">
+          {% for source in prepared.source.sources %}
+          <article class="source-row trace-target" tabindex="0" data-source-id="{{ source.source_id }}" data-block-ids="{% for block in prepared.blocks_for_source(source.source_id) %}{{ block.block_id }}{% if not loop.last %} {% endif %}{% endfor %}">
+            <div class="trace-heading">
+              <strong>{% if source.sheet %}{{ source.sheet }}!{% endif %}{{ source.row_number }}</strong>
+              <code>{{ source.source_id }}</code>
+            </div>
+            {% if source.historical_completed %}<span class="status-tag">已完成 · 跳过 LLM</span>{% endif %}
+            <dl class="source-fields">
+              {% for header in prepared.source.headers %}
+                {% set value = source.raw_values[loop.index0] if loop.index0 < source.raw_values|length else '' %}
+                {% if value %}<div><dt>{{ header }}</dt><dd>{{ value }}</dd></div>{% endif %}
+              {% endfor %}
+            </dl>
+          </article>
+          {% endfor %}
+        </div>
+      </aside>
+
+      <section class="review-panel content-panel" aria-label="内容审核">
+        <div class="panel-heading">
+          <div><h2>内容审核</h2><span class="visually-hidden">内容结构与来源映射</span></div>
+          <span class="badge">{{ prepared.blocks|length }} 块</span>
+        </div>
+        <div class="blocks review-blocks">
+          {% for block in prepared.blocks %}
+          <article id="block-{{ block.block_id }}" class="block review-block trace-target" tabindex="0" data-block-id="{{ block.block_id }}" data-source-ids="{{ block.source_ids|join(' ') }}">
+            <div class="block-head">
+              <div><strong>{{ block.section_title }} / {{ normalize_text(block.group_key) }}</strong><code>{{ block.block_id }}</code></div>
+              <span class="effective-badge"><span>当前</span><strong>{% if block.effective_version == 'generated' %}模型候选{% elif block.effective_version == 'edited' %}人工编辑{% else %}原文{% endif %}</strong></span>
+            </div>
+            <p class="source-links">来源：{{ block.source_ids|join('、') }}</p>
+
+            <div class="version-card selected current-content-card">
+              <div class="version-heading">
+                <b>当前内容</b>
+                <span>{% if block.effective_version == 'generated' %}模型候选 · 用于导出{% elif block.effective_version == 'edited' %}人工编辑 · 用于导出{% else %}原文 · 用于导出（已规范化）{% endif %}</span>
+              </div>
+              <p>{{ rendered_blocks[block.block_id] }}</p>
+            </div>
+
+            {% if block.generated_text %}
+            <div class="validation-summary validation-{{ block.validation_level }}">
+              <strong>模型候选：{% if block.validation_level == 'pass' %}事实校验通过{% elif block.validation_level == 'review' %}待人工确认{% else %}谨慎使用{% endif %}</strong>
+              <span>{% if block.effective_version == 'generated' %}已用于导出{% elif block.validation_level == 'conflict' %}请核对事实后采用{% else %}当前未采用{% endif %}</span>
+            </div>
+            {% set issues = warning_summary(block.validation_warnings) %}
+            {% if issues %}
+            <ul class="candidate-warning-summary">{% for issue in issues[:3] %}<li>{{ issue }}</li>{% endfor %}</ul>
+            <details class="candidate-warning-details"><summary>校验详情（{{ issues|length }} 项）</summary>
+              <ul class="validation-issues">{% for warning in block.validation_warnings %}<li>{{ warning }}</li>{% endfor %}</ul>
+            </details>
+            {% endif %}
+            <section class="model-candidate" aria-label="模型候选与原文行内差异">
+              <div class="version-heading"><b>模型生成结果</b><span>{% if block.effective_version == 'generated' %}当前已采用{% else %}未采用 · 不影响当前导出{% endif %}</span></div>
+              <p class="inline-diff-legend">红色删除线为原文删除，绿色高亮为模型新增；未标记文字保持不变。</p>
+              <div class="inline-diff">{% for kind, text in inline_diff(block.original_text, block.generated_text) %}{% if kind == 'removed' %}<del>{{ text }}</del>{% elif kind == 'added' %}<ins>{{ text }}</ins>{% else %}<span>{{ text }}</span>{% endif %}{% endfor %}</div>
+              <details class="candidate-full-text"><summary>查看完整模型文本</summary><p>{{ block.generated_text }}</p></details>
+            </section>
+            {% endif %}
+
+            {% set comparison_text = rendered_blocks[block.block_id] %}
+            {% set comparison_label = '当前内容' %}
+            <details class="diff-view">
+              <summary>查看变更对比</summary>
+              {% if comparison_text == block.original_text %}
+              <div class="diff-empty">内容没有文本变化</div>
+              {% else %}
+              <div class="unified-diff" aria-label="原文与{{ comparison_label }}统一差异对比">
+                <div class="diff-hunk">{{ unified_diff_header(block.original_text, comparison_text) }}</div>
+                {% for kind, line in unified_diff(block.original_text, comparison_text) %}
+                <div class="diff-line {{ kind }}">
+                  <span class="diff-prefix" aria-hidden="true">{% if kind == 'removed' %}-{% elif kind == 'added' %}+{% else %} {% endif %}</span>
+                  <span class="diff-content">{{ line }}</span>
+                </div>
+                {% endfor %}
+              </div>
+              {% endif %}
+            </details>
+
+            <div class="version-actions" aria-label="选择导出内容版本">
+              {% if block.effective_version != 'original' %}
+              <form class="inline-action" method="post" action="{{ url_for('select_workspace_block', token=session.token, block_id=block.block_id) }}">
+                <input type="hidden" name="revision" value="{{ session.revision }}">
+                <input type="hidden" name="version" value="original">
+                <button class="small secondary" type="submit">恢复原文</button>
+              </form>
+              {% endif %}
+              {% if block.generated_text and block.effective_version != 'generated' %}
+              <form class="inline-action" method="post" action="{{ url_for('select_workspace_block', token=session.token, block_id=block.block_id) }}">
+                <input type="hidden" name="revision" value="{{ session.revision }}">
+                <input type="hidden" name="version" value="generated">
+                {% if block.validation_level == 'conflict' %}<label class="consent"><input type="checkbox" name="confirm_warnings" value="yes" required><span>已核对事实，确认谨慎采用</span></label>{% endif %}
+                <button class="small secondary" type="submit">采用模型候选</button>
+              </form>
+              {% endif %}
+
+            </div>
+
+            <details class="editor" open>
+              <summary>人工编辑</summary>
+              <form class="manual-edit-form" method="post" action="{{ url_for('edit_workspace_block', token=session.token, block_id=block.block_id) }}" data-edit-preview-url="{{ url_for('preview_workspace_edit', token=session.token, block_id=block.block_id) }}">
+                <input type="hidden" name="confirm_edit" value="">
+                <input type="hidden" name="revision" value="{{ session.revision }}">
+                <textarea name="edited_text" rows="5" required>{{ rendered_blocks[block.block_id] }}</textarea>
+                <button class="small" type="submit">确认修改</button>
+              </form>
+            </details>
+
+            {% if block.llm_editable %}
+            <details class="regenerator">
+              <summary>单条重新生成</summary>
+              <form method="post" action="{{ url_for('regenerate_workspace_block', token=session.token, block_id=block.block_id) }}">
+                <input type="hidden" name="revision" value="{{ session.revision }}">
+                <label class="field compact"><span>处理模式</span><select name="content_mode" data-regenerate-mode>{% for value, label in content_modes %}<option value="{{ value }}"{% if session.content_mode == value %} selected{% endif %}>{{ label }}</option>{% endfor %}</select></label>
+                <label class="field compact"><span>模型</span><select name="model">{% for model in models %}<option value="{{ model }}"{% if session.model == model %} selected{% endif %}>{{ model }}</option>{% endfor %}</select></label>
+                <label class="field compact" data-regenerate-custom{% if session.content_mode != 'custom' %} hidden{% endif %}><span>自定义要求</span><textarea name="custom_instruction" rows="2"{% if session.content_mode == 'custom' %} required{% endif %}>{{ session.custom_instruction or '' }}</textarea></label>
+                {% if block.edited_text %}<label class="consent"><input type="checkbox" name="overwrite_edited" value="yes"><span>确认覆盖该块的人工编辑</span></label>{% endif %}
+                <label class="consent"><input type="checkbox" name="allow_external" value="yes" required><span>确认仅将该内容块发送到模型</span></label>
+                <button class="small" type="submit">重新生成此块</button>
+              </form>
+            </details>
+            {% endif %}
+          </article>
+          {% endfor %}
+        </div>
+      </section>
+
+      <aside class="review-panel document-panel" aria-label="文档效果">
+        <div class="panel-heading">
+          <h2>文档效果</h2>
+          <div class="preview-tabs" role="tablist" aria-label="预览形式">
+            <button class="preview-tab{% if not session.pdf_path %} active{% endif %}" type="button" role="tab" aria-selected="{{ 'false' if session.pdf_path else 'true' }}" data-preview-mode="html">HTML</button>
+            {% if session.pdf_path %}
+            <button class="preview-tab active" type="button" role="tab" aria-selected="true" data-preview-mode="pdf">PDF</button>
+            {% elif pdf_available %}
+            <form class="pdf-preview-form" method="post" action="{{ url_for('generate_workspace_pdf', token=session.token) }}">
+              <input type="hidden" name="revision" value="{{ session.revision }}">
+              <button class="preview-tab" type="submit" role="tab" aria-selected="false" title="生成当前版本的 PDF 预览">PDF</button>
+            </form>
+            {% else %}
+            <button class="preview-tab" type="button" disabled title="当前环境未安装 LibreOffice">PDF</button>
+            {% endif %}
+          </div>
+        </div>
+        <div data-preview-panel="html"{% if session.pdf_path %} hidden{% endif %}>
+          <article class="paper-preview">
+            <h2>{{ preset.document.report_title }}</h2>
+            <p class="preview-date">{{ session.report_date.strftime('%Y%m%d') }}</p>
+            {% for section in preset.sections %}
+              {% set section_blocks = prepared.blocks|selectattr('section_id', 'equalto', section.id)|list %}
+              {% if section_blocks %}
+              <section class="preview-section">
+                <h3>{{ section.title }}</h3>
+                {% for block in section_blocks %}
+                <div class="preview-entry" data-preview-block="{{ block.block_id }}">
+                  <h4>{{ normalize_text(block.group_key) }}</h4>
+                  <p>{{ rendered_blocks[block.block_id] }}</p>
+                </div>
+                {% endfor %}
+              </section>
+              {% endif %}
+            {% endfor %}
+          </article>
+        </div>
+        {% if session.pdf_path %}
+        <div data-preview-panel="pdf">
+          <object class="pdf-preview" data="{{ url_for('workspace_pdf', token=session.token, revision=session.revision) }}" type="application/pdf" aria-label="当前版本 PDF 版式预览">
+            <a class="button-link" href="{{ url_for('workspace_pdf', token=session.token, revision=session.revision) }}" target="_blank" rel="noopener">打开 PDF 版式预览</a>
+          </object>
+        </div>
+        {% endif %}
+        <div class="workspace-preview-actions">
+          <a class="button-link" href="{{ url_for('download_snapshot', token=session.token) }}">下载版本 {{ session.revision }} DOCX</a>
+        </div>
+      </aside>
+    </section>
+  </main>
+
+  <dialog id="edit-confirmation" class="edit-confirmation" aria-labelledby="edit-confirmation-title">
+    <h2 id="edit-confirmation-title">确认本次人工修改</h2>
+    <p>以下对比仅显示当前内容与本次修改。确认后直接生效，不进行模型事实校验。</p>
+    <div class="unified-diff edit-confirmation-diff" aria-label="本次人工修改前后对比"></div>
+    <p class="edit-confirmation-error" role="alert" hidden></p>
+    <div class="edit-confirmation-actions">
+      <button type="button" class="secondary" data-cancel-edit>返回编辑</button>
+      <button type="button" data-confirm-edit>确认并保存</button>
+    </div>
+  </dialog>
+
+  <div id="processing-overlay" class="processing-overlay" role="status" aria-live="polite" aria-hidden="true">
+    <div class="processing-panel"><span class="spinner" aria-hidden="true"></span><strong>正在更新当前周报</strong><p>保存后会生成新的文档版本，请稍候。</p></div>
+  </div>
+  <script>
+    (() => {
+      const sourceRows = [...document.querySelectorAll("[data-source-id]")];
+      const blocks = [...document.querySelectorAll("[data-block-id]")];
+      const previews = [...document.querySelectorAll("[data-preview-block]")];
+      const clear = () => [...sourceRows, ...blocks, ...previews].forEach((item) => item.classList.remove("trace-active"));
+      const activateSource = (row) => {
+        clear();
+        row.classList.add("trace-active");
+        const ids = row.dataset.blockIds.split(" ").filter(Boolean);
+        ids.forEach((id) => {
+          document.querySelector(`[data-block-id="${CSS.escape(id)}"]`)?.classList.add("trace-active");
+          document.querySelector(`[data-preview-block="${CSS.escape(id)}"]`)?.classList.add("trace-active");
+        });
+        if (ids.length) document.querySelector(`[data-block-id="${CSS.escape(ids[0])}"]`)?.scrollIntoView({behavior: "smooth", block: "center"});
+      };
+      const activateBlock = (block) => {
+        clear();
+        block.classList.add("trace-active");
+        document.querySelector(`[data-preview-block="${CSS.escape(block.dataset.blockId)}"]`)?.classList.add("trace-active");
+        const ids = block.dataset.sourceIds.split(" ").filter(Boolean);
+        ids.forEach((id) => document.querySelector(`[data-source-id="${CSS.escape(id)}"]`)?.classList.add("trace-active"));
+        if (ids.length) document.querySelector(`[data-source-id="${CSS.escape(ids[0])}"]`)?.scrollIntoView({behavior: "smooth", block: "center"});
+      };
+      sourceRows.forEach((row) => {
+        row.addEventListener("click", () => activateSource(row));
+        row.addEventListener("keydown", (event) => { if (event.key === "Enter" || event.key === " ") activateSource(row); });
+      });
+      blocks.forEach((block) => {
+        block.addEventListener("click", (event) => { if (!event.target.closest("form, details, button, input, textarea, select, a")) activateBlock(block); });
+        block.addEventListener("keydown", (event) => { if ((event.key === "Enter" || event.key === " ") && event.target === block) activateBlock(block); });
+      });
+      document.querySelectorAll("[data-preview-mode]").forEach((tab) => {
+        tab.addEventListener("click", () => {
+          const selectedMode = tab.dataset.previewMode;
+          document.querySelectorAll("[data-preview-mode]").forEach((item) => {
+            const selected = item.dataset.previewMode === selectedMode;
+            item.classList.toggle("active", selected);
+            item.setAttribute("aria-selected", selected ? "true" : "false");
+          });
+          document.querySelectorAll("[data-preview-panel]").forEach((panel) => {
+            panel.hidden = panel.dataset.previewPanel !== selectedMode;
+          });
+        });
+      });
+
+      document.querySelectorAll("[data-regenerate-mode]").forEach((mode) => {
+        const form = mode.closest("form");
+        const field = form.querySelector("[data-regenerate-custom]");
+        const instruction = field.querySelector("textarea");
+        const updateCustomInstruction = () => {
+          const isCustom = mode.value === "custom";
+          field.hidden = !isCustom;
+          instruction.required = isCustom;
+        };
+        mode.addEventListener("change", updateCustomInstruction);
+        updateCustomInstruction();
+      });
+
+      const overlay = document.getElementById("processing-overlay");
+      const processingTitle = overlay.querySelector("strong");
+      const processingMessage = overlay.querySelector("p");
+      const showProcessing = (title, message) => {
+        processingTitle.textContent = title;
+        processingMessage.textContent = message;
+        overlay.classList.add("visible");
+        overlay.setAttribute("aria-hidden", "false");
+      };
+      const editDialog = document.getElementById("edit-confirmation");
+      const editDiff = editDialog.querySelector(".edit-confirmation-diff");
+      const editError = editDialog.querySelector(".edit-confirmation-error");
+      let pendingEdit = null;
+      const cancelEdit = () => { pendingEdit = null; editDialog.close(); };
+      editDialog.querySelector("[data-cancel-edit]").addEventListener("click", cancelEdit);
+      editDialog.addEventListener("cancel", () => { pendingEdit = null; });
+      editDialog.querySelector("[data-confirm-edit]").addEventListener("click", () => {
+        if (!pendingEdit) return;
+        const {form, draft} = pendingEdit;
+        if (form.elements.edited_text.value !== draft) {
+          editError.textContent = "内容已变化，请返回编辑后重新确认。";
+          editError.hidden = false;
+          return;
+        }
+        form.elements.confirm_edit.value = "yes";
+        pendingEdit = null;
+        editDialog.close();
+        form.requestSubmit();
+      });
+      document.querySelectorAll(".manual-edit-form").forEach((form) => {
+        form.addEventListener("submit", async (event) => {
+          if (form.elements.confirm_edit.value === "yes") return;
+          event.preventDefault();
+          const button = form.querySelector("button[type=submit]");
+          const draft = form.elements.edited_text.value;
+          button.disabled = true;
+          try {
+            const response = await fetch(form.dataset.editPreviewUrl, {
+              method: "POST", body: new FormData(form), cache: "no-store",
+            });
+            const result = await response.json();
+            if (!response.ok) throw new Error(result.error || "无法生成修改对比，请重试。");
+            editDiff.replaceChildren();
+            const header = document.createElement("div");
+            header.className = "diff-hunk";
+            header.textContent = result.header;
+            editDiff.append(header);
+            for (const [kind, line] of result.diff) {
+              const row = document.createElement("div");
+              row.className = `diff-line ${kind}`;
+              const prefix = document.createElement("span");
+              prefix.className = "diff-prefix";
+              prefix.textContent = kind === "added" ? "+" : kind === "removed" ? "-" : " ";
+              const content = document.createElement("span");
+              content.className = "diff-content";
+              content.textContent = line;
+              row.append(prefix, content);
+              editDiff.append(row);
+            }
+            pendingEdit = {form, draft};
+            editError.hidden = true;
+            editDialog.showModal();
+          } catch (error) {
+            window.alert(error.message || "无法生成修改对比，请重试。");
+          } finally { button.disabled = false; }
+        });
+        form.elements.edited_text.addEventListener("input", () => {
+          form.elements.confirm_edit.value = "";
+        });
+      });
+      document.querySelectorAll(".content-panel form").forEach((form) => form.addEventListener("submit", (event) => {
+        if (event.defaultPrevented) return;
+        showProcessing("正在更新当前周报", "正在生成新的文档版本，请稍候。");
+      }));
+      document.querySelectorAll(".pdf-preview-form").forEach((form) => form.addEventListener("submit", () => {
+        const button = form.querySelector("button");
+        button.textContent = "PDF 生成中…";
+        button.setAttribute("aria-busy", "true");
+        button.disabled = true;
+      }));
+      window.addEventListener("pageshow", () => {
+        overlay.classList.remove("visible");
+        overlay.setAttribute("aria-hidden", "true");
+      });
+    })();
+  </script>
+</body>
+</html>

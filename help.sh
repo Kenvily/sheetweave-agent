@@ -1,1 +1,0 @@
-/home/guikang/.vscode-server/extensions/openai.chatgpt-26.917.62051-linux-x64/bin/linux-x86_64/codex   -c 'model_catalog_json="/home/guikang/.codex/model_catalog.json"'

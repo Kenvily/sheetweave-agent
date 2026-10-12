@@ -8,30 +8,31 @@ version = "0.1.0"
 description = "Generate a formatted weekly report from a multi-row CSV file."
 readme = "README.md"
 requires-python = ">=3.11"
-dependencies = ["Flask==3.1.3", "openpyxl==3.1.5"]
+dependencies = ["Flask==3.1.3", "gunicorn==26.2.0", "openpyxl==3.1.5"]
 
 [project.scripts]
 weekly-report-agent = "weekly_report_agent.cli:main"
 weekly-report-web = "weekly_report_agent.web:main"
 
 [tool.setuptools]
-package-dir = {"" = "src"}
-
-[tool.setuptools.packages.find]
-where = ["src"]
+packages = ["weekly_report_agent", "weekly_report_agent.llm", "weekly_report_agent.rules"]
+package-dir = {weekly_report_agent = "src"}
 
 [tool.setuptools.package-data]
-weekly_report_agent = ["templates/*.html", "static/*.css", "rules/*.json"]
+weekly_report_agent = ["templates/*.html", "static/*.css", "static/*.js", "rules/*.json", "examples/*"]
 
 [tool.pytest.ini_options]
 addopts = "-q"
-pythonpath = ["src"]
 testpaths = ["tests"]
 
 [tool.ruff]
 target-version = "py311"
 line-length = 100
 src = ["src", "tests"]
+extend-exclude = [".agents"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["weekly_report_agent"]

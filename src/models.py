@@ -135,14 +135,33 @@ class ContentBlock:
     mode: str = "original"
     validation_level: str = "pass"
     validation_warnings: tuple[str, ...] = ()
+    edited_validation_level: str | None = None
+    edited_validation_warnings: tuple[str, ...] = ()
+    selected_version: str = "auto"
+
+    @property
+    def effective_version(self) -> str:
+        """Return the content version currently selected for export."""
+        if self.selected_version == "edited" and self.edited_text is not None:
+            return "edited"
+        if self.selected_version == "generated" and self.generated_text is not None:
+            return "generated"
+        if self.selected_version == "original":
+            return "original"
+        if self.edited_text is not None and self.edited_validation_level == "pass":
+            return "edited"
+        if self.generated_text is not None and self.validation_level == "pass":
+            return "generated"
+        return "original"
 
     @property
     def effective_text(self) -> str:
-        """Return edited, generated, or original text in precedence order."""
-        if self.edited_text is not None:
-            return self.edited_text
-        if self.generated_text is not None and self.validation_level == "pass":
-            return self.generated_text
+        """Return the explicitly selected or safely accepted content text."""
+        version = self.effective_version
+        if version == "edited":
+            return self.edited_text or self.original_text
+        if version == "generated":
+            return self.generated_text or self.original_text
         return self.original_text
 
 

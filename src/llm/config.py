@@ -28,6 +28,8 @@ class LLMConfig:
     timeout: float = 60.0
     max_retries: int = 1
     max_batch_chars: int = 12000
+    max_concurrency: int = 2
+    auto_correct: bool = False
 
     @property
     def available(self) -> bool:
@@ -94,7 +96,12 @@ def validate_llm_config(config: LLMConfig) -> LLMConfig:
         raise LLMConfigurationError("LLM 模型允许列表无效。")
     if config.model not in models:
         raise LLMConfigurationError("默认 LLM 模型必须包含在允许列表中。")
-    if config.timeout <= 0 or config.max_retries < 0 or config.max_batch_chars <= 0:
+    if (
+        config.timeout <= 0
+        or config.max_retries < 0
+        or config.max_batch_chars <= 0
+        or not 1 <= config.max_concurrency <= 4
+    ):
         raise LLMConfigurationError("LLM 超时、重试或批次长度配置无效。")
     return replace(config, api_base=api_base, allowed_models=models)
 
@@ -117,5 +124,9 @@ def load_llm_config(environ: dict[str, str] | None = None) -> LLMConfig:
         max_batch_chars=_positive_int(
             values.get("LLM_MAX_BATCH_CHARS", "12000"), "LLM_MAX_BATCH_CHARS"
         ),
+        max_concurrency=_positive_int(
+            values.get("LLM_MAX_CONCURRENCY", "2"), "LLM_MAX_CONCURRENCY"
+        ),
+        auto_correct=values.get("LLM_AUTO_CORRECT", "false").strip().lower() == "true",
     )
     return validate_llm_config(config)

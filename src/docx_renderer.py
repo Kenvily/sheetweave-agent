@@ -9,6 +9,7 @@ import zipfile
 from pathlib import Path
 from xml.etree import ElementTree as ET
 
+from .docx_security import inspect_docx_package
 from .models import ParagraphKind, ReportParagraph, ReportPlan
 
 WORD_NS = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
@@ -109,6 +110,7 @@ def render_docx(plan: ReportPlan, template_path: Path, output_path: Path) -> Non
         raise ValueError("输出文件必须使用 .docx 扩展名。")
     if template_path.resolve() == output_path.resolve():
         raise ValueError("输出文件不能覆盖模板文件。")
+    inspect_docx_package(template_path)
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     temporary_name: str | None = None

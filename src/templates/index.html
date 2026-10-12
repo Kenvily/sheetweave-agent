@@ -8,12 +8,24 @@
 </head>
 <body>
   <main class="container{% if prepared %} container-wide{% endif %}">
-    <header><h1>研发周报生成器</h1></header>
+    <header class="app-header">
+      <div class="app-brand"><span class="app-mark" aria-hidden="true">W</span><h1>研发周报生成器</h1></div>
+      <a class="header-link" href="{{ url_for('help_page') }}">使用帮助</a>
+    </header>
+
+    <section class="usage-stats" aria-label="匿名使用统计">
+      <article><strong>{{ usage_metrics.total_generations }}</strong><span>累计成功生成</span></article>
+      <article><strong>{{ usage_metrics.weekly_generations }}</strong><span>本周成功生成</span></article>
+      <article><strong>{{ usage_metrics.estimated_visitors }}</strong><span>独立访客（估算）</span></article>
+      <article><strong>{{ usage_metrics.page_views }}</strong><span>访问次数</span></article>
+    </section>
+    {% if not stats_available %}<p role="status">统计暂不可用，请检查服务端统计存储配置。</p>{% endif %}
 
     <section class="card">
       {% if error %}<div class="alert" role="alert">{{ error }}</div>{% endif %}
 
-      <form id="report-form" action="{{ url_for('generate') }}" method="post" enctype="multipart/form-data">
+      <form data-stream-url="{{ url_for('preview_stream') }}" id="report-form" action="{{ url_for('generate') }}" method="post" enctype="multipart/form-data">
+        <input type="hidden" name="generation_task_id" value="{{ generation_task_id }}">
         <div class="grid">
           <label class="field">
             <span>周报文件</span>
@@ -74,20 +86,10 @@
           </label>
         </div>
 
-        <label class="field">
-          <span>自定义要求（仅自定义模式使用）</span>
-          <textarea name="custom_instruction" rows="3" placeholder="例如：按成果、问题和后续动作整理，不改变任何事实。">{{ form.get('custom_instruction', '') }}</textarea>
+        <label id="custom-instruction-field" class="field"{% if selected_mode != 'custom' %} hidden{% endif %}>
+          <span>自定义要求</span>
+          <textarea name="custom_instruction" rows="3" placeholder="例如：按成果、问题和后续动作整理，不改变任何事实。"{% if selected_mode == 'custom' %} required{% endif %}>{{ form.get('custom_instruction', '') }}</textarea>
         </label>
-
-        <section class="data-notice" aria-label="模型数据说明">
-          <strong>数据处理说明</strong>
-          <p>原文保留不会调用模型。其他模式会将内容块、所属章节和项目名称发送到服务器配置的 DeepSeek 服务；不会发送完整上传文件或 API Key。</p>
-          <p class="service-state">模型服务：{% if llm_available %}已配置{% else %}未配置，仅原文保留可直接使用{% endif %}</p>
-          <label class="consent">
-            <input type="checkbox" name="allow_external" value="yes"{% if form.get('allow_external') == 'yes' %} checked{% endif %}>
-            <span>选择模型模式时，我确认允许发送上述内容</span>
-          </label>
-        </section>
 
         <details>
           <summary>高级适配设置</summary>
@@ -195,8 +197,14 @@
       <span class="spinner" aria-hidden="true"></span>
       <strong id="processing-title">正在处理周报</strong>
       <p id="processing-message">请保持页面打开，完成后会自动显示结果。</p>
+      <div id="stream-candidates" class="stream-candidates" hidden>
+        <p>生成中的临时候选 · 尚未校验，不代表最终导出内容</p>
+        <div data-stream-batches></div>
+      </div>
+      <button type="button" class="secondary" id="cancel-generation" hidden>取消生成</button>
     </div>
   </div>
+  <script src="{{ url_for('static', filename='stream.js') }}"></script>
   <script>
     (() => {
       const form = document.getElementById("report-form");
@@ -208,8 +216,19 @@
       const week = form?.elements.week;
       const sheet = form?.elements.sheet;
       const sectionNumber = form?.elements.section_number;
+      const contentMode = form?.elements.content_mode;
+      const customInstructionField = document.getElementById("custom-instruction-field");
+      const customInstruction = form?.elements.custom_instruction;
       const optionsStatus = document.getElementById("input-options-status");
       if (!form || !overlay) return;
+
+      const updateCustomInstruction = () => {
+        const isCustom = contentMode.value === "custom";
+        customInstructionField.hidden = !isCustom;
+        customInstruction.required = isCustom;
+      };
+      contentMode.addEventListener("change", updateCustomInstruction);
+      updateCustomInstruction();
 
       let optionsRequest;
       const replaceOptions = (select, values, emptyLabel, selectedValue = "") => {
@@ -311,34 +330,73 @@
         URL.revokeObjectURL(url);
       };
 
+      let generationController;
+      const streamCandidates = document.getElementById("stream-candidates");
+      const streamBatches = streamCandidates.querySelector("[data-stream-batches]");
+      const cancelGeneration = document.getElementById("cancel-generation");
+      cancelGeneration.addEventListener("click", () => generationController?.abort());
       form.addEventListener("submit", async (event) => {
-        const submitter = event.submitter;
-        const target = submitter?.formAction || form.action;
+        event.preventDefault();
+        const target = event.submitter?.formAction || form.action;
         const isPreview = target.endsWith("/preview");
         const mode = form.elements.content_mode.value;
+        const streaming = isPreview || mode !== "original";
         title.textContent = isPreview ? "正在生成预览" : "正在生成 DOCX";
         message.textContent = mode === "original"
           ? "正在解析数据并应用排版规则，请稍候。"
-          : "正在调用 DeepSeek 整理内容并校验事实，请稍候。";
+          : "正在连接模型，收到内容后会逐步显示。";
+        streamBatches.replaceChildren();
+        streamCandidates.hidden = true;
+        generationController = new AbortController();
+        cancelGeneration.hidden = false;
         setProcessing(true);
-        if (isPreview) return;
-
-        event.preventDefault();
+        const resetTaskId = () => {
+          form.elements.generation_task_id.value = crypto.randomUUID
+            ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+        };
         try {
-          const response = await fetch(target, {
-            method: "POST",
-            body: new FormData(form),
-          });
-          if (!response.ok || response.headers.get("Content-Type")?.includes("text/html")) {
-            document.open();
-            document.write(await response.text());
-            document.close();
-            return;
+          if (streaming) {
+            const batchElements = new Map();
+            await window.streamWeeklyReport({
+              form, signal: generationController.signal,
+              onProgress: (text) => { message.textContent = text; },
+              onBatch: (batch, text) => {
+                let element = batchElements.get(batch);
+                if (!element) {
+                  const section = document.createElement("section");
+                  const heading = document.createElement("strong");
+                  heading.textContent = `候选内容 ${batch}`;
+                  element = document.createElement("pre");
+                  section.append(heading, element);
+                  streamBatches.append(section);
+                  batchElements.set(batch, element);
+                }
+                element.textContent = text;
+                streamCandidates.hidden = false;
+              },
+              onComplete: async (payload) => {
+                if (isPreview) window.location.assign(payload.url);
+                else {
+                  const response = await fetch(payload.download_url, {signal: generationController.signal});
+                  if (!response.ok) throw new Error("报告已生成，但下载失败，请重试。");
+                  await downloadResponse(response);
+                  resetTaskId();
+                }
+              },
+            });
+          } else {
+            const response = await fetch(target, {
+              method: "POST", body: new FormData(form), signal: generationController.signal,
+            });
+            if (!response.ok || response.headers.get("Content-Type")?.includes("text/html")) {
+              document.open(); document.write(await response.text()); document.close();
+            } else { await downloadResponse(response); resetTaskId(); }
           }
-          await downloadResponse(response);
-        } catch (_error) {
-          window.alert("生成请求失败，请检查网络连接后重试。");
+        } catch (error) {
+          if (error.name !== "AbortError") window.alert(error.message || "生成请求失败，请重试。");
         } finally {
+          generationController = null;
+          cancelGeneration.hidden = true;
           setProcessing(false);
         }
       });

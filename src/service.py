@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import replace
 from datetime import date
 from pathlib import Path
@@ -49,6 +50,7 @@ def process_report(
     custom_instruction: str | None = None,
     model: str | None = None,
     llm_service: LLMService | None = None,
+    on_delta: Callable[[int, str], None] | None = None,
 ) -> PreparedReport:
     """Apply a content mode while keeping original mode fully offline."""
     mode = parse_content_mode(content_mode)
@@ -60,6 +62,7 @@ def process_report(
                 mode=ContentMode.ORIGINAL.value,
                 validation_level="pass",
                 validation_warnings=(),
+                selected_version="auto",
             )
             for block in prepared.blocks
         )
@@ -70,6 +73,51 @@ def process_report(
         mode,
         custom_instruction=custom_instruction,
         model=model,
+        on_delta=on_delta,
+    )
+
+
+def edit_report_block(prepared: PreparedReport, block_id: str, text: str) -> PreparedReport:
+    """Adopt a confirmed human edit without model fact validation."""
+    value = text.strip()
+    if not value:
+        raise ValueError("人工编辑内容不能为空。")
+    target = prepared.block_by_id(block_id)
+    replacement = replace(
+        target,
+        edited_text=value,
+        edited_validation_level=None,
+        edited_validation_warnings=(),
+        selected_version="edited",
+    )
+    return replace(
+        prepared,
+        blocks=tuple(
+            replacement if block.block_id == block_id else block for block in prepared.blocks
+        ),
+    )
+
+
+def select_block_version(
+    prepared: PreparedReport, block_id: str, version: str, *, confirm_warnings: bool = False
+) -> PreparedReport:
+    """Select original, generated, or edited content under graded safety rules."""
+    if version not in {"original", "generated", "edited"}:
+        raise ValueError("不支持的内容版本。")
+    target = prepared.block_by_id(block_id)
+    if version == "generated":
+        if target.generated_text is None:
+            raise ValueError("该内容块没有模型候选。")
+        if target.validation_level == "conflict" and not confirm_warnings:
+            raise ValueError("模型候选需谨慎使用，请核对事实并确认告警后采用。")
+    if version == "edited" and target.edited_text is None:
+        raise ValueError("该内容块没有人工编辑版本。")
+    replacement = replace(target, selected_version=version)
+    return replace(
+        prepared,
+        blocks=tuple(
+            replacement if block.block_id == block_id else block for block in prepared.blocks
+        ),
     )
 
 

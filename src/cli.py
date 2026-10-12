@@ -29,7 +29,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="DOCX 模板",
     )
     parser.add_argument(
-        "--output", type=Path, default=Path("output/研发三部周报.docx"), help="输出 DOCX"
+        "--output", type=Path, default=Path("outputs/研发三部周报.docx"), help="输出 DOCX"
     )
     parser.add_argument("--week", help="周次，例如“第1周”或“2026年9月第1周”")
     parser.add_argument("--preset", choices=("rd3", "general"), default="rd3", help="周报规则预设")

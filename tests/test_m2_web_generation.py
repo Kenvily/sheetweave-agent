@@ -58,15 +58,14 @@ def _form(*, mode: str = "polish", consent: bool = True):
     return form
 
 
-def test_web_requires_consent_before_model_call() -> None:
+def test_web_model_mode_does_not_require_removed_consent_field(tmp_path: Path) -> None:
     fake = WebFakeClient()
-    response = _client(fake).post(
+    response = _client(fake, tmp_path).post(
         "/preview", data=_form(consent=False), content_type="multipart/form-data"
     )
 
-    assert response.status_code == 400
-    assert "确认允许" in response.text
-    assert fake.calls == 0
+    assert response.status_code == 200
+    assert fake.calls == 1
 
 
 def test_web_preview_displays_original_and_model_result(tmp_path: Path) -> None:
@@ -77,9 +76,15 @@ def test_web_preview_displays_original_and_model_result(tmp_path: Path) -> None:
 
     assert response.status_code == 200
     assert "内容结构与来源映射" in response.text
-    assert "模型结果" in response.text
+    assert "当前内容" in response.text
+    assert "模型候选 · 用于导出" in response.text
+    assert response.text.count("查看变更对比") == 1
+    assert 'class="unified-diff"' in response.text
+    assert 'class="diff-line removed"' in response.text
+    assert 'class="diff-line added"' in response.text
     assert "模型已规范整理" in response.text
-    assert "无需重新选择文件" in response.text
+    assert "周报审核工作区" in response.text
+    assert "点击内容块可反向定位来源" not in response.text
     assert 'href="/download/' in response.text
     assert fake.calls == 1
 
@@ -154,11 +159,13 @@ def test_conflicting_candidate_is_explained_and_excluded_from_snapshot(tmp_path:
     preview = client.post("/preview", data=_form(), content_type="multipart/form-data")
 
     assert preview.status_code == 200
-    assert "严重冲突" in preview.text
-    assert "本次 DOCX 已自动使用原文" in preview.text
+    assert "谨慎使用" in preview.text
+    assert "请核对事实后采用" in preview.text
+    assert "原文 · 用于导出" in preview.text
+    assert preview.text.count("查看变更对比") == 1
     assert "AUC 0.91" in preview.text
     assert "AUC 0.81" in preview.text
-    assert fake.calls == 2
+    assert fake.calls == 1
     marker = 'href="/download/'
     token = preview.text.split(marker, 1)[1].split('"', 1)[0]
     response = client.get(f"/download/{token}")
@@ -166,4 +173,4 @@ def test_conflicting_candidate_is_explained_and_excluded_from_snapshot(tmp_path:
         document = package.read("word/document.xml").decode()
     assert "AUC 0.81" in document
     assert "AUC 0.91" not in document
-    assert fake.calls == 2
+    assert fake.calls == 1
