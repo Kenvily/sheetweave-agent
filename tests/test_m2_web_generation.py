@@ -159,13 +159,13 @@ def test_conflicting_candidate_is_explained_and_excluded_from_snapshot(tmp_path:
     preview = client.post("/preview", data=_form(), content_type="multipart/form-data")
 
     assert preview.status_code == 200
-    assert "严重冲突" in preview.text
-    assert "不可直接采用" in preview.text
+    assert "谨慎使用" in preview.text
+    assert "请核对事实后采用" in preview.text
     assert "原文 · 用于导出" in preview.text
     assert preview.text.count("查看变更对比") == 1
     assert "AUC 0.91" in preview.text
     assert "AUC 0.81" in preview.text
-    assert fake.calls == 2
+    assert fake.calls == 1
     marker = 'href="/download/'
     token = preview.text.split(marker, 1)[1].split('"', 1)[0]
     response = client.get(f"/download/{token}")
@@ -173,4 +173,4 @@ def test_conflicting_candidate_is_explained_and_excluded_from_snapshot(tmp_path:
         document = package.read("word/document.xml").decode()
     assert "AUC 0.81" in document
     assert "AUC 0.91" not in document
-    assert fake.calls == 2
+    assert fake.calls == 1

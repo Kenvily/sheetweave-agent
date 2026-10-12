@@ -6,6 +6,9 @@ import argparse
 import difflib
 import io
 import os
+import re
+import secrets
+import sqlite3
 import tempfile
 import zipfile
 from collections.abc import Sequence
@@ -13,7 +16,7 @@ from datetime import date
 from pathlib import Path
 from xml.etree import ElementTree as ET
 
-from flask import Flask, jsonify, redirect, render_template, request, send_file, url_for
+from flask import Flask, g, jsonify, redirect, render_template, request, send_file, url_for
 from werkzeug.datastructures import FileStorage
 from werkzeug.exceptions import RequestEntityTooLarge
 
@@ -30,8 +33,9 @@ from .llm import (
     parse_content_mode,
 )
 from .llm.config import DEFAULT_MODEL, DEFAULT_MODELS
+from .normalizer import normalize_report_text
 from .pdf_preview import PdfPreviewError, PdfPreviewService
-from .planner import validate_section_number
+from .planner import build_body_paragraphs, validate_section_number
 from .rules import RulePreset, list_rule_presets, load_rule_preset
 from .service import (
     edit_report_block,
@@ -41,6 +45,7 @@ from .service import (
     render_prepared_report,
     select_block_version,
 )
+from .stats import UsageMetrics, UsageStats
 from .web_sessions import ReportSession, SessionConflictError, SnapshotStore
 
 DEFAULT_TEMPLATE = Path("data/研发三部周报模板.docx")
@@ -49,6 +54,10 @@ MAX_UPLOAD_SIZE = 16 * 1024 * 1024
 DEFAULT_SECTION_NUMBER = 9
 SUPPORTED_INPUT_SUFFIXES = {".csv", ".xlsx"}
 FIELD_KEYS = ("project", "detail", "status", "content", "issues", "next_plan")
+VISITOR_COOKIE_NAME = "weekly_report_visitor"
+VISITOR_COOKIE_MAX_AGE = 365 * 24 * 60 * 60
+ANONYMOUS_ID_PATTERN = re.compile(r"^[A-Za-z0-9_-]{16,128}$")
+EXAMPLE_FILES = {"general-weekly.csv", "general-weekly.xlsx"}
 
 
 def _parse_date(value: str) -> date:
@@ -137,11 +146,43 @@ def _unified_diff_header(before: str, after: str) -> str:
     return f"@@ -{old_start},{old_count} +{new_start},{new_count} @@"
 
 
+def _inline_diff(before: str, after: str) -> tuple[tuple[str, str], ...]:
+    """Expose complete candidate text with word/character-level change markers."""
+    tokens = re.compile(r"[A-Za-z0-9_]+(?:\.[A-Za-z0-9_]+)*|[^A-Za-z0-9_]", re.DOTALL)
+    left, right = tokens.findall(before), tokens.findall(after)
+    matcher = difflib.SequenceMatcher(a=left, b=right)
+    parts: list[tuple[str, str]] = []
+    for operation, left_start, left_end, right_start, right_end in matcher.get_opcodes():
+        if operation == "equal":
+            parts.append(("context", "".join(right[right_start:right_end])))
+        else:
+            if operation in {"delete", "replace"}:
+                parts.append(("removed", "".join(left[left_start:left_end])))
+            if operation in {"insert", "replace"}:
+                parts.append(("added", "".join(right[right_start:right_end])))
+    return tuple(parts)
+
+
+def _warning_summary(warnings: tuple[str, ...]) -> tuple[str, ...]:
+    """Deduplicate concise issue messages while retaining stored detail separately."""
+    messages = []
+    for warning in warnings:
+        if "；原文：" not in warning:
+            continue
+        message = warning.split("；原文：", 1)[0]
+        for prefix in ("谨慎使用：", "严重冲突：", "待人工确认：", "通过："):
+            message = message.removeprefix(prefix)
+        if message not in messages:
+            messages.append(message)
+    return tuple(messages)
+
+
 def create_app(
     template_path: Path | None = None,
     llm_service: LLMService | None = None,
     snapshot_store: SnapshotStore | None = None,
     pdf_preview_service: PdfPreviewService | None = None,
+    usage_stats: UsageStats | None = None,
 ) -> Flask:
     """Create and configure the weekly report web application."""
     app = Flask(__name__)
@@ -149,18 +190,90 @@ def create_app(
         os.environ.get("WEEKLY_REPORT_TEMPLATE", DEFAULT_TEMPLATE)
     )
     snapshot_root = Path(
-        os.environ.get(
-            "WEEKLY_REPORT_SNAPSHOT_DIR",
-            str(Path(tempfile.gettempdir()) / "weekly-report-agent-snapshots"),
-        )
+        os.environ.get("WEEKLY_REPORT_SNAPSHOT_DIR", "").strip()
+        or str(Path(tempfile.gettempdir()) / "weekly-report-agent-snapshots")
     )
+    configured_stats = usage_stats
+    if configured_stats is None:
+        try:
+            configured_stats = UsageStats.from_environment()
+        except (OSError, sqlite3.Error, ValueError) as exc:
+            app.logger.warning(
+                "统计持久化初始化失败（%s），请检查存储路径和配置。", type(exc).__name__
+            )
+            configured_stats = None
     app.config.update(
         MAX_CONTENT_LENGTH=MAX_UPLOAD_SIZE,
         REPORT_TEMPLATE_PATH=configured_template.resolve(),
         LLM_SERVICE=llm_service,
         SNAPSHOT_STORE=snapshot_store or SnapshotStore(snapshot_root),
         PDF_PREVIEW_SERVICE=pdf_preview_service or PdfPreviewService.from_environment(),
+        USAGE_STATS=configured_stats,
     )
+
+    def safe_metrics() -> UsageMetrics:
+        service = app.config.get("USAGE_STATS")
+        if service is None:
+            return UsageMetrics()
+        try:
+            return service.metrics()
+        except Exception:  # Statistics must never interrupt report generation.
+            g.stats_unavailable = True
+            app.logger.warning("无法读取持久化统计，请检查统计数据库。")
+            return UsageMetrics()
+
+    def safe_record_visitor(visitor_id: str) -> None:
+        service = app.config.get("USAGE_STATS")
+        if service is not None:
+            try:
+                service.record_visitor(visitor_id)
+            except Exception:  # Statistics are deliberately best effort.
+                g.stats_unavailable = True
+                app.logger.warning("访客统计持久化失败，请检查统计数据库。")
+
+    def safe_record_generation(task_id: str) -> None:
+        service = app.config.get("USAGE_STATS")
+        if service is not None:
+            try:
+                service.record_generation(task_id)
+            except Exception:  # A valid DOCX must still be delivered.
+                g.stats_unavailable = True
+                app.logger.warning("生成次数持久化失败，请检查统计数据库。")
+
+    @app.before_request
+    def identify_anonymous_visitor() -> None:
+        if request.method != "GET" or request.endpoint not in {"index", "help_page", "workspace"}:
+            return
+        visitor_id = request.cookies.get(VISITOR_COOKIE_NAME, "")
+        is_new = not ANONYMOUS_ID_PATTERN.fullmatch(visitor_id)
+        if is_new:
+            visitor_id = secrets.token_urlsafe(24)
+        g.anonymous_visitor_id = visitor_id
+        g.set_anonymous_visitor_cookie = is_new
+        safe_record_visitor(visitor_id)
+
+    @app.after_request
+    def persist_anonymous_visitor(response):
+        if (
+            response.status_code == 200
+            and request.method == "GET"
+            and request.endpoint in {"index", "help_page", "workspace"}
+        ):
+            service = app.config.get("USAGE_STATS")
+            if service is not None:
+                try:
+                    service.record_page_view()
+                except Exception:
+                    app.logger.warning("访问次数持久化失败，请检查统计数据库。")
+        if getattr(g, "set_anonymous_visitor_cookie", False):
+            response.set_cookie(
+                VISITOR_COOKIE_NAME,
+                g.anonymous_visitor_id,
+                max_age=VISITOR_COOKIE_MAX_AGE,
+                httponly=True,
+                samesite="Lax",
+            )
+        return response
 
     def llm_page_settings() -> tuple[tuple[str, ...], str, bool]:
         configured_service = app.config.get("LLM_SERVICE")
@@ -183,6 +296,7 @@ def create_app(
     ):
         models, default_model, llm_available = llm_page_settings()
         default_mode = ContentMode.ORIGINAL.value
+        metrics = safe_metrics()
         return (
             render_template(
                 "index.html",
@@ -200,6 +314,14 @@ def create_app(
                 models=models,
                 default_model=default_model,
                 llm_available=llm_available,
+                usage_metrics=metrics,
+                stats_available=(
+                    app.config.get("USAGE_STATS") is not None
+                    and not getattr(g, "stats_unavailable", False)
+                ),
+                generation_task_id=(
+                    request.form.get("generation_task_id", "").strip() or secrets.token_urlsafe(18)
+                ),
             ),
             status,
         )
@@ -214,7 +336,7 @@ def create_app(
         models, default_model, llm_available = llm_page_settings()
         preset = load_rule_preset(session.preset_id)
         notices = {
-            "edited": "人工编辑已保存，文档预览与下载文件已同步更新。",
+            "edited": "人工编辑已确认并生效，文档预览与下载文件已同步更新。",
             "selected": "有效内容版本已更新，文档预览与下载文件已同步更新。",
             "regenerated": "所选内容块已重新生成，其他内容未改变。",
             "pdf": "当前版本的 PDF 版式预览已生成。",
@@ -229,6 +351,8 @@ def create_app(
                 notice=notices.get(notice, notice),
                 unified_diff=_unified_diff,
                 unified_diff_header=_unified_diff_header,
+                inline_diff=_inline_diff,
+                warning_summary=_warning_summary,
                 content_modes=tuple(
                     (mode.value, MODE_OPTION_LABELS[mode])
                     for mode in ContentMode
@@ -238,6 +362,16 @@ def create_app(
                 default_model=default_model,
                 llm_available=llm_available,
                 pdf_available=app.config["PDF_PREVIEW_SERVICE"].available,
+                rendered_blocks={
+                    block.block_id: "\n".join(
+                        paragraph.text
+                        for paragraph in build_body_paragraphs(
+                            block.effective_text, session.report_date
+                        )
+                    )
+                    for block in session.prepared.blocks
+                },
+                normalize_text=lambda text: normalize_report_text(text, session.report_date),
             ),
             status,
         )
@@ -315,6 +449,17 @@ def create_app(
     @app.get("/")
     def index():
         return show_form()
+
+    @app.get("/help")
+    def help_page():
+        return render_template("help.html", usage_metrics=safe_metrics())
+
+    @app.get("/examples/<filename>")
+    def download_example(filename: str):
+        if filename not in EXAMPLE_FILES:
+            return show_form(error="示例文件不存在。", status=404)
+        path = Path(__file__).with_name("examples") / filename
+        return send_file(path, as_attachment=True, download_name=filename, max_age=3600)
 
     @app.post("/input-options")
     def input_options():
@@ -397,6 +542,13 @@ def create_app(
                     report_content=output_path.read_bytes(),
                     download_name=filename,
                 )
+            submitted_task_id = request.form.get("generation_task_id", "").strip()
+            preview_task_id = (
+                submitted_task_id
+                if ANONYMOUS_ID_PATTERN.fullmatch(submitted_task_id)
+                else snapshot_token
+            )
+            safe_record_generation(f"preview:{preview_task_id}")
             return show_workspace(app.config["SNAPSHOT_STORE"].load_session(snapshot_token))
         except (
             FileNotFoundError,
@@ -416,12 +568,45 @@ def create_app(
         except ValueError as exc:
             return show_form(error=str(exc), status=404)
 
+    @app.post("/workspace/<token>/blocks/<block_id>/edit-preview")
+    def preview_workspace_edit(token: str, block_id: str):
+        """Compare a human draft with current output without modifying the session."""
+        try:
+            session = current_session(token)
+            block = session.prepared.block_by_id(block_id)
+            draft = request.form.get("edited_text", "").strip()
+            if not draft:
+                raise ValueError("人工编辑内容不能为空。")
+            before = "\n".join(
+                item.text
+                for item in build_body_paragraphs(block.effective_text, session.report_date)
+            )
+            after = "\n".join(
+                item.text for item in build_body_paragraphs(draft, session.report_date)
+            )
+            response = jsonify(
+                before=before,
+                after=after,
+                diff=_unified_diff(before, after),
+                header=_unified_diff_header(before, after),
+            )
+            response.headers["Cache-Control"] = "no-store"
+            return response
+        except SessionConflictError as exc:
+            return jsonify(error=str(exc)), 409
+        except (KeyError, OSError, ValueError) as exc:
+            return jsonify(error=str(exc)), 400
+
     @app.post("/workspace/<token>/blocks/<block_id>/edit")
     def edit_workspace_block(token: str, block_id: str):
         try:
             session = current_session(token)
+            if request.form.get("confirm_edit") != "yes":
+                raise ValueError("请查看本次修改对比并确认后保存。")
             prepared = edit_report_block(
-                session.prepared, block_id, request.form.get("edited_text", "")
+                session.prepared,
+                block_id,
+                request.form.get("edited_text", ""),
             )
             render_session_revision(session, prepared)
             return redirect(
@@ -437,7 +622,10 @@ def create_app(
         try:
             session = current_session(token)
             prepared = select_block_version(
-                session.prepared, block_id, request.form.get("version", "")
+                session.prepared,
+                block_id,
+                request.form.get("version", ""),
+                confirm_warnings=request.form.get("confirm_warnings") == "yes",
             )
             render_session_revision(session, prepared)
             return redirect(
@@ -580,6 +768,13 @@ def create_app(
                 report_content = output_path.read_bytes()
 
             filename = f"{preset.name}-{report_date:%Y%m%d}.docx"
+            submitted_task_id = request.form.get("generation_task_id", "").strip()
+            task_id = (
+                submitted_task_id
+                if ANONYMOUS_ID_PATTERN.fullmatch(submitted_task_id)
+                else secrets.token_urlsafe(24)
+            )
+            safe_record_generation(f"direct:{task_id}")
             return send_file(
                 io.BytesIO(report_content),
                 mimetype=DOCX_MIME_TYPE,

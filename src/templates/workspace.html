@@ -19,7 +19,10 @@
           {% if session.content_mode == 'original' %}<span>原文模式</span>{% endif %}
         </div>
       </div>
-      <a class="button-link" href="{{ url_for('download_snapshot', token=session.token) }}">下载当前 DOCX</a>
+      <nav class="workspace-header-actions" aria-label="工作区操作">
+        <a class="header-link" href="{{ url_for('help_page') }}">使用帮助</a>
+        <a class="button-link" href="{{ url_for('download_snapshot', token=session.token) }}">下载当前 DOCX</a>
+      </nav>
     </header>
 
     {% if error %}<div class="alert workspace-alert" role="alert">{{ error }}</div>{% endif %}
@@ -62,7 +65,7 @@
           {% for block in prepared.blocks %}
           <article id="block-{{ block.block_id }}" class="block review-block trace-target" tabindex="0" data-block-id="{{ block.block_id }}" data-source-ids="{{ block.source_ids|join(' ') }}">
             <div class="block-head">
-              <div><strong>{{ block.section_title }} / {{ block.group_key }}</strong><code>{{ block.block_id }}</code></div>
+              <div><strong>{{ block.section_title }} / {{ normalize_text(block.group_key) }}</strong><code>{{ block.block_id }}</code></div>
               <span class="effective-badge"><span>当前</span><strong>{% if block.effective_version == 'generated' %}模型候选{% elif block.effective_version == 'edited' %}人工编辑{% else %}原文{% endif %}</strong></span>
             </div>
             <p class="source-links">来源：{{ block.source_ids|join('、') }}</p>
@@ -70,30 +73,33 @@
             <div class="version-card selected current-content-card">
               <div class="version-heading">
                 <b>当前内容</b>
-                <span>{% if block.effective_version == 'generated' %}模型候选 · 用于导出{% elif block.effective_version == 'edited' %}人工编辑 · 用于导出{% else %}原文 · 用于导出{% endif %}</span>
+                <span>{% if block.effective_version == 'generated' %}模型候选 · 用于导出{% elif block.effective_version == 'edited' %}人工编辑 · 用于导出{% else %}原文 · 用于导出（已规范化）{% endif %}</span>
               </div>
-              <p>{{ block.effective_text }}</p>
+              <p>{{ rendered_blocks[block.block_id] }}</p>
             </div>
 
             {% if block.generated_text %}
             <div class="validation-summary validation-{{ block.validation_level }}">
-              <strong>模型候选：{% if block.validation_level == 'pass' %}事实校验通过{% elif block.validation_level == 'review' %}待人工确认{% else %}严重冲突{% endif %}</strong>
-              <span>{% if block.validation_level == 'conflict' %}不可直接采用{% elif block.effective_version == 'generated' %}已用于导出{% else %}当前未采用{% endif %}</span>
+              <strong>模型候选：{% if block.validation_level == 'pass' %}事实校验通过{% elif block.validation_level == 'review' %}待人工确认{% else %}谨慎使用{% endif %}</strong>
+              <span>{% if block.effective_version == 'generated' %}已用于导出{% elif block.validation_level == 'conflict' %}请核对事实后采用{% else %}当前未采用{% endif %}</span>
             </div>
-            {% if block.validation_warnings %}<ul class="validation-issues">{% for warning in block.validation_warnings %}<li>{{ warning }}</li>{% endfor %}</ul>{% endif %}
+            {% set issues = warning_summary(block.validation_warnings) %}
+            {% if issues %}
+            <ul class="candidate-warning-summary">{% for issue in issues[:3] %}<li>{{ issue }}</li>{% endfor %}</ul>
+            <details class="candidate-warning-details"><summary>校验详情（{{ issues|length }} 项）</summary>
+              <ul class="validation-issues">{% for warning in block.validation_warnings %}<li>{{ warning }}</li>{% endfor %}</ul>
+            </details>
+            {% endif %}
+            <section class="model-candidate" aria-label="模型候选与原文行内差异">
+              <div class="version-heading"><b>模型生成结果</b><span>{% if block.effective_version == 'generated' %}当前已采用{% else %}未采用 · 不影响当前导出{% endif %}</span></div>
+              <p class="inline-diff-legend">红色删除线为原文删除，绿色高亮为模型新增；未标记文字保持不变。</p>
+              <div class="inline-diff">{% for kind, text in inline_diff(block.original_text, block.generated_text) %}{% if kind == 'removed' %}<del>{{ text }}</del>{% elif kind == 'added' %}<ins>{{ text }}</ins>{% else %}<span>{{ text }}</span>{% endif %}{% endfor %}</div>
+              <details class="candidate-full-text"><summary>查看完整模型文本</summary><p>{{ block.generated_text }}</p></details>
+            </section>
             {% endif %}
 
-            {% if block.edited_text %}
-            <div class="validation-summary validation-{{ block.edited_validation_level or 'review' }}">
-              <strong>人工编辑：{% if block.edited_validation_level == 'pass' %}校验通过{% elif block.edited_validation_level == 'review' %}待人工确认{% else %}严重冲突{% endif %}</strong>
-              <span>{% if block.edited_validation_level == 'conflict' %}不可采用{% elif block.effective_version == 'edited' %}已用于导出{% else %}当前未采用{% endif %}</span>
-            </div>
-            {% if block.edited_validation_warnings %}<ul class="validation-issues">{% for warning in block.edited_validation_warnings %}<li>{{ warning }}</li>{% endfor %}</ul>{% endif %}
-            {% endif %}
-
-            {% if block.generated_text or block.edited_text %}
-            {% set comparison_text = block.edited_text or block.generated_text %}
-            {% set comparison_label = '人工编辑' if block.edited_text else '模型候选' %}
+            {% set comparison_text = rendered_blocks[block.block_id] %}
+            {% set comparison_label = '当前内容' %}
             <details class="diff-view">
               <summary>查看变更对比</summary>
               {% if comparison_text == block.original_text %}
@@ -110,7 +116,6 @@
               </div>
               {% endif %}
             </details>
-            {% endif %}
 
             <div class="version-actions" aria-label="选择导出内容版本">
               {% if block.effective_version != 'original' %}
@@ -120,28 +125,24 @@
                 <button class="small secondary" type="submit">恢复原文</button>
               </form>
               {% endif %}
-              {% if block.generated_text and block.validation_level != 'conflict' and block.effective_version != 'generated' %}
+              {% if block.generated_text and block.effective_version != 'generated' %}
               <form class="inline-action" method="post" action="{{ url_for('select_workspace_block', token=session.token, block_id=block.block_id) }}">
                 <input type="hidden" name="revision" value="{{ session.revision }}">
                 <input type="hidden" name="version" value="generated">
+                {% if block.validation_level == 'conflict' %}<label class="consent"><input type="checkbox" name="confirm_warnings" value="yes" required><span>已核对事实，确认谨慎采用</span></label>{% endif %}
                 <button class="small secondary" type="submit">采用模型候选</button>
               </form>
               {% endif %}
-              {% if block.edited_text and block.edited_validation_level != 'conflict' and block.effective_version != 'edited' %}
-              <form class="inline-action" method="post" action="{{ url_for('select_workspace_block', token=session.token, block_id=block.block_id) }}">
-                <input type="hidden" name="revision" value="{{ session.revision }}">
-                <input type="hidden" name="version" value="edited">
-                <button class="small secondary" type="submit">采用人工编辑</button>
-              </form>
-              {% endif %}
+
             </div>
 
             <details class="editor" open>
               <summary>人工编辑</summary>
-              <form method="post" action="{{ url_for('edit_workspace_block', token=session.token, block_id=block.block_id) }}">
+              <form class="manual-edit-form" method="post" action="{{ url_for('edit_workspace_block', token=session.token, block_id=block.block_id) }}" data-edit-preview-url="{{ url_for('preview_workspace_edit', token=session.token, block_id=block.block_id) }}">
+                <input type="hidden" name="confirm_edit" value="">
                 <input type="hidden" name="revision" value="{{ session.revision }}">
-                <textarea name="edited_text" rows="5" required>{{ block.edited_text or block.effective_text }}</textarea>
-                <button class="small" type="submit">保存并校验</button>
+                <textarea name="edited_text" rows="5" required>{{ rendered_blocks[block.block_id] }}</textarea>
+                <button class="small" type="submit">确认修改</button>
               </form>
             </details>
 
@@ -167,14 +168,19 @@
       <aside class="review-panel document-panel" aria-label="文档效果">
         <div class="panel-heading">
           <h2>文档效果</h2>
-          {% if session.pdf_path %}
           <div class="preview-tabs" role="tablist" aria-label="预览形式">
-            <button class="preview-tab" type="button" role="tab" aria-selected="false" data-preview-mode="html">HTML</button>
+            <button class="preview-tab{% if not session.pdf_path %} active{% endif %}" type="button" role="tab" aria-selected="{{ 'false' if session.pdf_path else 'true' }}" data-preview-mode="html">HTML</button>
+            {% if session.pdf_path %}
             <button class="preview-tab active" type="button" role="tab" aria-selected="true" data-preview-mode="pdf">PDF</button>
+            {% elif pdf_available %}
+            <form class="pdf-preview-form" method="post" action="{{ url_for('generate_workspace_pdf', token=session.token) }}">
+              <input type="hidden" name="revision" value="{{ session.revision }}">
+              <button class="preview-tab" type="submit" role="tab" aria-selected="false" title="生成当前版本的 PDF 预览">PDF</button>
+            </form>
+            {% else %}
+            <button class="preview-tab" type="button" disabled title="当前环境未安装 LibreOffice">PDF</button>
+            {% endif %}
           </div>
-          {% else %}
-          <span class="badge">HTML 快速预览</span>
-          {% endif %}
         </div>
         <div data-preview-panel="html"{% if session.pdf_path %} hidden{% endif %}>
           <article class="paper-preview">
@@ -187,8 +193,8 @@
                 <h3>{{ section.title }}</h3>
                 {% for block in section_blocks %}
                 <div class="preview-entry" data-preview-block="{{ block.block_id }}">
-                  <h4>{{ block.group_key }}</h4>
-                  <p>{{ block.effective_text }}</p>
+                  <h4>{{ normalize_text(block.group_key) }}</h4>
+                  <p>{{ rendered_blocks[block.block_id] }}</p>
                 </div>
                 {% endfor %}
               </section>
@@ -204,19 +210,22 @@
         </div>
         {% endif %}
         <div class="workspace-preview-actions">
-          {% if pdf_available %}
-          <form class="pdf-preview-form" method="post" action="{{ url_for('generate_workspace_pdf', token=session.token) }}">
-            <input type="hidden" name="revision" value="{{ session.revision }}">
-            <button class="secondary" type="submit">{% if session.pdf_path %}重新生成 PDF 预览{% else %}生成 PDF 版式预览{% endif %}</button>
-          </form>
-          {% else %}
-          <div class="preview-unavailable"><strong>PDF 版式预览不可用</strong><span>当前环境未安装 LibreOffice</span></div>
-          {% endif %}
           <a class="button-link" href="{{ url_for('download_snapshot', token=session.token) }}">下载版本 {{ session.revision }} DOCX</a>
         </div>
       </aside>
     </section>
   </main>
+
+  <dialog id="edit-confirmation" class="edit-confirmation" aria-labelledby="edit-confirmation-title">
+    <h2 id="edit-confirmation-title">确认本次人工修改</h2>
+    <p>以下对比仅显示当前内容与本次修改。确认后直接生效，不进行模型事实校验。</p>
+    <div class="unified-diff edit-confirmation-diff" aria-label="本次人工修改前后对比"></div>
+    <p class="edit-confirmation-error" role="alert" hidden></p>
+    <div class="edit-confirmation-actions">
+      <button type="button" class="secondary" data-cancel-edit>返回编辑</button>
+      <button type="button" data-confirm-edit>确认并保存</button>
+    </div>
+  </dialog>
 
   <div id="processing-overlay" class="processing-overlay" role="status" aria-live="polite" aria-hidden="true">
     <div class="processing-panel"><span class="spinner" aria-hidden="true"></span><strong>正在更新当前周报</strong><p>保存后会生成新的文档版本，请稍候。</p></div>
@@ -289,11 +298,76 @@
         overlay.classList.add("visible");
         overlay.setAttribute("aria-hidden", "false");
       };
-      document.querySelectorAll(".content-panel form").forEach((form) => form.addEventListener("submit", () => {
+      const editDialog = document.getElementById("edit-confirmation");
+      const editDiff = editDialog.querySelector(".edit-confirmation-diff");
+      const editError = editDialog.querySelector(".edit-confirmation-error");
+      let pendingEdit = null;
+      const cancelEdit = () => { pendingEdit = null; editDialog.close(); };
+      editDialog.querySelector("[data-cancel-edit]").addEventListener("click", cancelEdit);
+      editDialog.addEventListener("cancel", () => { pendingEdit = null; });
+      editDialog.querySelector("[data-confirm-edit]").addEventListener("click", () => {
+        if (!pendingEdit) return;
+        const {form, draft} = pendingEdit;
+        if (form.elements.edited_text.value !== draft) {
+          editError.textContent = "内容已变化，请返回编辑后重新确认。";
+          editError.hidden = false;
+          return;
+        }
+        form.elements.confirm_edit.value = "yes";
+        pendingEdit = null;
+        editDialog.close();
+        form.requestSubmit();
+      });
+      document.querySelectorAll(".manual-edit-form").forEach((form) => {
+        form.addEventListener("submit", async (event) => {
+          if (form.elements.confirm_edit.value === "yes") return;
+          event.preventDefault();
+          const button = form.querySelector("button[type=submit]");
+          const draft = form.elements.edited_text.value;
+          button.disabled = true;
+          try {
+            const response = await fetch(form.dataset.editPreviewUrl, {
+              method: "POST", body: new FormData(form), cache: "no-store",
+            });
+            const result = await response.json();
+            if (!response.ok) throw new Error(result.error || "无法生成修改对比，请重试。");
+            editDiff.replaceChildren();
+            const header = document.createElement("div");
+            header.className = "diff-hunk";
+            header.textContent = result.header;
+            editDiff.append(header);
+            for (const [kind, line] of result.diff) {
+              const row = document.createElement("div");
+              row.className = `diff-line ${kind}`;
+              const prefix = document.createElement("span");
+              prefix.className = "diff-prefix";
+              prefix.textContent = kind === "added" ? "+" : kind === "removed" ? "-" : " ";
+              const content = document.createElement("span");
+              content.className = "diff-content";
+              content.textContent = line;
+              row.append(prefix, content);
+              editDiff.append(row);
+            }
+            pendingEdit = {form, draft};
+            editError.hidden = true;
+            editDialog.showModal();
+          } catch (error) {
+            window.alert(error.message || "无法生成修改对比，请重试。");
+          } finally { button.disabled = false; }
+        });
+        form.elements.edited_text.addEventListener("input", () => {
+          form.elements.confirm_edit.value = "";
+        });
+      });
+      document.querySelectorAll(".content-panel form").forEach((form) => form.addEventListener("submit", (event) => {
+        if (event.defaultPrevented) return;
         showProcessing("正在更新当前周报", "正在生成新的文档版本，请稍候。");
       }));
       document.querySelectorAll(".pdf-preview-form").forEach((form) => form.addEventListener("submit", () => {
-        showProcessing("正在生成 PDF 版式预览", "当前报告版本不会改变，DOCX 下载不受影响。");
+        const button = form.querySelector("button");
+        button.textContent = "PDF 生成中…";
+        button.setAttribute("aria-busy", "true");
+        button.disabled = true;
       }));
       window.addEventListener("pageshow", () => {
         overlay.classList.remove("visible");

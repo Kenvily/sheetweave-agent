@@ -9,14 +9,23 @@
 <body>
   <main class="container{% if prepared %} container-wide{% endif %}">
     <header class="app-header">
-      <span class="app-mark" aria-hidden="true">W</span>
-      <h1>研发周报生成器</h1>
+      <div class="app-brand"><span class="app-mark" aria-hidden="true">W</span><h1>研发周报生成器</h1></div>
+      <a class="header-link" href="{{ url_for('help_page') }}">使用帮助</a>
     </header>
+
+    <section class="usage-stats" aria-label="匿名使用统计">
+      <article><strong>{{ usage_metrics.total_generations }}</strong><span>累计成功生成</span></article>
+      <article><strong>{{ usage_metrics.weekly_generations }}</strong><span>本周成功生成</span></article>
+      <article><strong>{{ usage_metrics.estimated_visitors }}</strong><span>独立访客（估算）</span></article>
+      <article><strong>{{ usage_metrics.page_views }}</strong><span>访问次数</span></article>
+    </section>
+    {% if not stats_available %}<p role="status">统计暂不可用，请检查服务端统计存储配置。</p>{% endif %}
 
     <section class="card">
       {% if error %}<div class="alert" role="alert">{{ error }}</div>{% endif %}
 
       <form id="report-form" action="{{ url_for('generate') }}" method="post" enctype="multipart/form-data">
+        <input type="hidden" name="generation_task_id" value="{{ generation_task_id }}">
         <div class="grid">
           <label class="field">
             <span>周报文件</span>
@@ -340,6 +349,9 @@
             return;
           }
           await downloadResponse(response);
+          form.elements.generation_task_id.value = crypto.randomUUID
+            ? crypto.randomUUID()
+            : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
         } catch (_error) {
           window.alert("生成请求失败，请检查网络连接后重试。");
         } finally {

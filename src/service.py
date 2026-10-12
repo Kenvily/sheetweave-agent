@@ -10,7 +10,6 @@ from .content_builder import build_content_blocks
 from .docx_renderer import render_docx
 from .input_parser import parse_input
 from .llm import ContentMode, LLMService, load_llm_config, parse_content_mode
-from .llm.validation import ValidationLevel, validate_generated_text
 from .models import PreparedReport, ReportPlan, WeeklyData, WeeklyItem
 from .planner import build_prepared_report_plan, build_report_plan
 from .rules import RulePreset, load_rule_preset
@@ -75,33 +74,18 @@ def process_report(
     )
 
 
-def _validation_warnings(result) -> tuple[str, ...]:
-    """Create concise user-facing messages for an edited candidate."""
-    return tuple(
-        f"{issue.level.label}：{issue.message}；原文：{issue.original_excerpt}；"
-        f"编辑：{issue.generated_excerpt}"
-        for issue in result.issues
-    )
-
-
 def edit_report_block(prepared: PreparedReport, block_id: str, text: str) -> PreparedReport:
-    """Store and validate one manual edit without silently adopting unsafe text."""
+    """Adopt a confirmed human edit without model fact validation."""
     value = text.strip()
     if not value:
         raise ValueError("人工编辑内容不能为空。")
     target = prepared.block_by_id(block_id)
-    result = validate_generated_text(target.original_text, value, target.mode or "polish")
-    level = {
-        ValidationLevel.PASS: "pass",
-        ValidationLevel.REVIEW: "review",
-        ValidationLevel.CONFLICT: "conflict",
-    }[result.level]
     replacement = replace(
         target,
         edited_text=value,
-        edited_validation_level=level,
-        edited_validation_warnings=_validation_warnings(result),
-        selected_version="edited" if result.level is ValidationLevel.PASS else "original",
+        edited_validation_level=None,
+        edited_validation_warnings=(),
+        selected_version="edited",
     )
     return replace(
         prepared,
@@ -111,7 +95,9 @@ def edit_report_block(prepared: PreparedReport, block_id: str, text: str) -> Pre
     )
 
 
-def select_block_version(prepared: PreparedReport, block_id: str, version: str) -> PreparedReport:
+def select_block_version(
+    prepared: PreparedReport, block_id: str, version: str, *, confirm_warnings: bool = False
+) -> PreparedReport:
     """Select original, generated, or edited content under graded safety rules."""
     if version not in {"original", "generated", "edited"}:
         raise ValueError("不支持的内容版本。")
@@ -119,13 +105,10 @@ def select_block_version(prepared: PreparedReport, block_id: str, version: str) 
     if version == "generated":
         if target.generated_text is None:
             raise ValueError("该内容块没有模型候选。")
-        if target.validation_level == "conflict":
-            raise ValueError("严重冲突的模型候选不能直接采用，请编辑修正或保留原文。")
-    if version == "edited":
-        if target.edited_text is None:
-            raise ValueError("该内容块没有人工编辑版本。")
-        if target.edited_validation_level == "conflict":
-            raise ValueError("人工编辑仍存在严重事实冲突，不能采用。")
+        if target.validation_level == "conflict" and not confirm_warnings:
+            raise ValueError("模型候选需谨慎使用，请核对事实并确认告警后采用。")
+    if version == "edited" and target.edited_text is None:
+        raise ValueError("该内容块没有人工编辑版本。")
     replacement = replace(target, selected_version=version)
     return replace(
         prepared,

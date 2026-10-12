@@ -145,7 +145,9 @@ def test_pdf_preview_is_generated_for_exact_revision_without_changing_it(
     client = app.test_client()
     page, token = _preview(client)
 
-    assert "生成 PDF 版式预览" in page
+    assert 'title="生成当前版本的 PDF 预览"' in page
+    assert 'class="pdf-preview-form"' in page
+    assert "重新生成 PDF 预览" not in page
     response = client.post(f"/workspace/{token}/pdf", data={"revision": 1})
 
     assert response.status_code == 302
@@ -178,7 +180,7 @@ def test_edit_invalidates_old_pdf_and_stale_pdf_cannot_be_published(tmp_path: Pa
 
     edited = client.post(
         f"/workspace/{token}/blocks/{block.block_id}/edit",
-        data={"revision": 1, "edited_text": "完成模型验证（AUC 0.81）。"},
+        data={"confirm_edit": "yes", "revision": 1, "edited_text": "完成模型验证（AUC 0.81）。"},
     )
 
     assert edited.status_code == 302

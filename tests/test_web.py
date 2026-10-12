@@ -22,6 +22,11 @@ def test_get_only_form_targets_redirect_to_home() -> None:
         assert response.status_code == 302
         assert response.headers["Location"].endswith("/")
 
+        page = client.get(path, follow_redirects=True)
+        assert page.status_code == 200
+        assert page.request.path == "/"
+        assert "研发周报生成器" in page.text
+
 
 def test_root_post_compatibly_generates_instead_of_returning_405() -> None:
     response = _client().post(

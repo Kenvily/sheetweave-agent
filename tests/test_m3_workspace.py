@@ -5,8 +5,10 @@ import zipfile
 from collections.abc import Sequence
 from pathlib import Path
 
+import pytest
+
 from weekly_report_agent.llm import LLMConfig, LLMService
-from weekly_report_agent.web import DOCX_MIME_TYPE, _unified_diff, create_app
+from weekly_report_agent.web import DOCX_MIME_TYPE, _inline_diff, _unified_diff, create_app
 from weekly_report_agent.web_sessions import SnapshotStore
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -122,6 +124,50 @@ def test_unified_diff_only_marks_changed_physical_line() -> None:
         ("context", "第三行"),
     )
 
+    deleted = _unified_diff("第一行\n第二行\n第三行", "第一行\n第三行")
+    assert deleted == (
+        ("context", "第一行"),
+        ("removed", "第二行"),
+        ("context", "第三行"),
+    )
+
+
+def test_inline_diff_retains_complete_original_and_candidate() -> None:
+    original = "已完成接口验证，AUC 0.81。\n<script>旧备注</script>"
+    candidate = "已完成接口测试，AUC 0.91。\n<script>新备注</script>"
+    parts = _inline_diff(original, candidate)
+    assert "".join(text for kind, text in parts if kind != "added") == original
+    assert "".join(text for kind, text in parts if kind != "removed") == candidate
+    assert ("removed", "0.81") in parts
+    assert ("added", "0.91") in parts
+
+
+def test_rejected_candidate_has_inline_view_without_changing_export(tmp_path: Path) -> None:
+    app, store = _application(tmp_path, ConflictingClient())
+    client = app.test_client()
+    page, token = _preview(client, SINGLE_SOURCE_CSV, mode="polish")
+    assert 'aria-label="模型候选与原文行内差异"' in page.text
+    assert "未采用 · 不影响当前导出" in page.text
+    assert "<del>0.81</del>" in page.text
+    assert "<ins>0.91</ins>" in page.text
+    assert "查看完整模型文本" in page.text
+    assert "校验详情（1 项）" in page.text
+    summary = re.search(
+        r'<ul class="candidate-warning-summary">(.*?)</ul>', page.text, re.DOTALL
+    ).group(1)
+    assert "原文：" not in summary and "生成：" not in summary
+    assert "指标" in summary
+    assert store.load_session(token).prepared.blocks[0].effective_version == "original"
+    document = _document_text(client.get(f"/download/{token}"))
+    assert "AUC 0.81" in document and "AUC 0.91" not in document
+
+
+def test_candidate_inline_view_escapes_model_markup(tmp_path: Path) -> None:
+    app, _store = _application(tmp_path, SuffixClient("<img src=x onerror=alert()>"))
+    page, _token = _preview(app.test_client(), SINGLE_SOURCE_CSV, mode="polish")
+    assert "<img src=x" not in page.text
+    assert "&lt;img" in page.text
+
 
 def test_workspace_has_three_columns_and_complete_bidirectional_ids(tmp_path: Path) -> None:
     app, store = _application(tmp_path)
@@ -143,6 +189,52 @@ def test_workspace_has_three_columns_and_complete_bidirectional_ids(tmp_path: Pa
     assert f'data-block-ids="{" ".join(block.block_id for block in linked)}"' in response.text
     assert len(weekly.source_ids) == 2  # 多行合并为一块
     assert len(linked) >= 3  # 一行进入多个章节块
+
+
+@pytest.mark.parametrize("preset", ["general", "rd3"])
+def test_original_preview_shows_exported_normalized_body(tmp_path: Path, preset: str) -> None:
+    original = "联系强哥，使用lgb，AUC 0.81，下周三复核"
+    if preset == "general":
+        source = f"项目,本周工作\n项目甲,{original}\n"
+    else:
+        source = f"项目,具体内容,状态,2026年10月\n,,,第1周\n项目甲,验证,进行中,{original}\n"
+    app, store = _application(tmp_path)
+    client = app.test_client()
+    response = client.post(
+        "/preview",
+        data={
+            "csv_file": (io.BytesIO(source.encode()), "synthetic.csv"),
+            "preset": preset,
+            "report_date": "2026-10-10",
+            "content_mode": "original",
+        },
+    )
+    assert response.status_code == 200
+    token = re.search(r'href="/download/([^"/]+)"', response.text).group(1)
+    current = re.search(
+        r'class="version-card selected current-content-card">.*?<p>(.*?)</p>',
+        response.text,
+        re.DOTALL,
+    ).group(1)
+    assert current == (
+        "1、进展内容：\n（1）联系相关负责人，使用LightGBM，AUC 0.81，2026年10月14日复核。"
+    )
+    document = _document_text(client.get(f"/download/{token}"))
+    assert all(line in document for line in current.splitlines())
+    session = store.load_session(token)
+    block = session.prepared.blocks[0]
+    assert block.original_text == original
+    assert original in response.text  # left source retains the unmodified input
+
+    normalized_edit = "联系相关负责人，使用LightGBM，AUC 0.81，2026年10月14日复核"
+    edited = client.post(
+        f"/workspace/{token}/blocks/{block.block_id}/edit",
+        data={"confirm_edit": "yes", "revision": 1, "edited_text": normalized_edit},
+    )
+    assert edited.status_code == 302
+    saved = store.load_session(token).prepared.blocks[0]
+    assert saved.edited_validation_level is None
+    assert saved.effective_version == "edited"
 
 
 def test_workspace_refresh_preserves_session_and_diff_is_read_only(tmp_path: Path) -> None:
@@ -178,7 +270,7 @@ def test_safe_manual_edit_persists_and_updates_downloaded_docx(tmp_path: Path) -
 
     response = client.post(
         f"/workspace/{token}/blocks/{block.block_id}/edit",
-        data={"revision": session.revision, "edited_text": edited},
+        data={"confirm_edit": "yes", "revision": session.revision, "edited_text": edited},
     )
 
     assert response.status_code == 302
@@ -189,13 +281,13 @@ def test_safe_manual_edit_persists_and_updates_downloaded_docx(tmp_path: Path) -
     assert edited in refreshed.text
     assert refreshed.text.count("查看变更对比") == 1
     assert refreshed.text.count('class="diff-line removed"') == 1
-    assert refreshed.text.count('class="diff-line added"') == 1
+    assert refreshed.text.count('class="diff-line added"') == 2
     assert '<div class="version-heading"><b>原文</b>' not in refreshed.text
     document = _document_text(client.get(f"/download/{token}"))
     assert edited in document
 
 
-def test_conflicting_manual_edit_is_retained_but_not_exported(tmp_path: Path) -> None:
+def test_confirmed_manual_edit_can_correct_facts_without_model_validation(tmp_path: Path) -> None:
     app, store = _application(tmp_path)
     client = app.test_client()
     _response, token = _preview(client, SINGLE_SOURCE_CSV)
@@ -205,18 +297,91 @@ def test_conflicting_manual_edit_is_retained_but_not_exported(tmp_path: Path) ->
 
     response = client.post(
         f"/workspace/{token}/blocks/{block.block_id}/edit",
-        data={"revision": 1, "edited_text": unsafe},
+        data={"confirm_edit": "yes", "revision": 1, "edited_text": unsafe},
         follow_redirects=True,
     )
 
     assert response.status_code == 200
-    assert "人工编辑：严重冲突" in response.text
+    assert "人工编辑：谨慎使用" not in response.text
+    assert "采用人工编辑" not in response.text
     current = store.load_session(token).prepared.block_by_id(block.block_id)
     assert current.edited_text == unsafe
-    assert current.effective_text == block.original_text
+    assert current.effective_text == unsafe
+    assert current.edited_validation_level is None
+    assert current.edited_validation_warnings == ()
     document = _document_text(client.get(f"/download/{token}"))
-    assert "0.81" in document
-    assert "0.91" not in document
+    assert "0.91" in document
+
+
+def test_manual_edit_requires_confirmation_and_preview_does_not_save(tmp_path: Path) -> None:
+    app, store = _application(tmp_path)
+    client = app.test_client()
+    _page, token = _preview(client, SINGLE_SOURCE_CSV)
+    session = store.load_session(token)
+    block = session.prepared.blocks[0]
+    route = f"/workspace/{token}/blocks/{block.block_id}/edit"
+    data = {"revision": 1, "edited_text": "人工修正模型验证，AUC 0.91。"}
+
+    rejected = client.post(route, data=data)
+    assert rejected.status_code == 400
+    assert "请查看本次修改对比并确认后保存" in rejected.text
+    preview = client.post(route + "-preview", data=data)
+    assert preview.status_code == 200
+    assert preview.headers["Cache-Control"] == "no-store"
+    assert "AUC 0.81" in preview.json["before"]
+    assert "AUC 0.91" in preview.json["after"]
+    assert any(kind == "removed" for kind, _text in preview.json["diff"])
+    assert any(kind == "added" for kind, _text in preview.json["diff"])
+    assert store.load_session(token).revision == 1
+    assert store.load_session(token).prepared.blocks[0].edited_text is None
+
+    confirmed = client.post(route, data={**data, "confirm_edit": "yes"})
+    assert confirmed.status_code == 302
+    assert store.load_session(token).revision == 2
+    assert "AUC 0.91" in _document_text(client.get(f"/download/{token}"))
+    stale = client.post(route + "-preview", data=data)
+    assert stale.status_code == 409
+    assert "其他页面更新" in stale.json["error"]
+
+
+def test_editor_and_persistent_diff_follow_selected_content(tmp_path: Path) -> None:
+    fake = SuffixClient("，模型候选备注")
+    app, store = _application(tmp_path, fake)
+    client = app.test_client()
+    page, token = _preview(client, SINGLE_SOURCE_CSV, mode="polish")
+    block = store.load_session(token).prepared.blocks[0]
+    textarea = re.search(
+        r'<textarea name="edited_text"[^>]*>(.*?)</textarea>', page.text, re.DOTALL
+    )
+    assert "模型候选备注" in textarea.group(1)
+    assert "1、进展内容：" in textarea.group(1)
+    edit_route = f"/workspace/{token}/blocks/{block.block_id}/edit"
+    draft = {"revision": 1, "edited_text": "人工确定结果，AUC 0.91。"}
+    edit_preview = client.post(edit_route + "-preview", data=draft)
+    assert "模型候选备注" in edit_preview.json["before"]
+    assert "人工确定结果" in edit_preview.json["after"]
+    client.post(edit_route, data={**draft, "confirm_edit": "yes"})
+    selected = client.get(f"/workspace/{token}").text
+    diff = re.search(r'<details class="diff-view">(.*?)</details>', selected, re.DOTALL).group(1)
+    assert "人工确定结果" in diff
+    assert "模型候选备注" not in diff
+    assert "采用人工编辑" not in selected
+    assert 'id="edit-confirmation"' in selected
+
+    restored = client.post(
+        f"/workspace/{token}/blocks/{block.block_id}/select",
+        data={"revision": 2, "version": "original"},
+        follow_redirects=True,
+    ).text
+    textarea = re.search(r'<textarea name="edited_text"[^>]*>(.*?)</textarea>', restored, re.DOTALL)
+    assert "人工确定结果" not in textarea.group(1)
+    assert "模型候选备注" not in textarea.group(1)
+    assert "AUC 0.81" in textarea.group(1)
+    diff = re.search(r'<details class="diff-view">(.*?)</details>', restored, re.DOTALL).group(1)
+    assert "人工确定结果" not in diff
+    assert "模型候选备注" not in diff
+    assert "AUC 0.81" in diff
+    assert len(fake.calls) == 1
 
 
 def test_version_selection_rerenders_same_current_snapshot(tmp_path: Path) -> None:
@@ -260,10 +425,23 @@ def test_conflicting_model_candidate_cannot_be_selected(tmp_path: Path) -> None:
     )
 
     assert response.status_code == 400
-    assert "严重冲突的模型候选不能直接采用" in response.text
+    assert "模型候选需谨慎使用" in response.text
     current = store.load_session(token)
     assert current.revision == 1
     assert current.prepared.blocks[0].effective_version == "original"
+
+    page = client.get(f"/workspace/{token}")
+    assert 'rows="5" required>1、进展内容：\n（1）完成模型验证，AUC 0.81。</textarea>' in page.text
+    confirmed = client.post(
+        f"/workspace/{token}/blocks/{block.block_id}/select",
+        data={"revision": 1, "version": "generated", "confirm_warnings": "yes"},
+    )
+    assert confirmed.status_code == 302
+    assert "AUC 0.91" in _document_text(client.get(f"/download/{token}"))
+    adopted = store.load_session(token)
+    assert adopted.prepared.blocks[0].validation_level == "conflict"
+    assert adopted.prepared.blocks[0].effective_version == "generated"
+    assert client.get(f"/workspace/{token}").status_code == 200
 
 
 def test_single_block_regeneration_changes_only_target(tmp_path: Path) -> None:
@@ -306,7 +484,7 @@ def test_regeneration_requires_explicit_edit_overwrite(tmp_path: Path) -> None:
     block = store.load_session(token).prepared.blocks[0]
     edit = client.post(
         f"/workspace/{token}/blocks/{block.block_id}/edit",
-        data={"revision": 1, "edited_text": "完成模型验证（AUC 0.81）。"},
+        data={"confirm_edit": "yes", "revision": 1, "edited_text": "完成模型验证（AUC 0.81）。"},
     )
     assert edit.status_code == 302
 
@@ -350,11 +528,15 @@ def test_stale_revision_returns_409_without_overwriting_newer_edit(tmp_path: Pat
 
     first = client.post(
         f"/workspace/{token}/blocks/{block.block_id}/edit",
-        data={"revision": 1, "edited_text": first_edit},
+        data={"confirm_edit": "yes", "revision": 1, "edited_text": first_edit},
     )
     stale = client.post(
         f"/workspace/{token}/blocks/{block.block_id}/edit",
-        data={"revision": 1, "edited_text": "完成模型验证，AUC 0.81；旧标签修改。"},
+        data={
+            "confirm_edit": "yes",
+            "revision": 1,
+            "edited_text": "完成模型验证，AUC 0.81；旧标签修改。",
+        },
     )
 
     assert first.status_code == 302

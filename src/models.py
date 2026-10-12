@@ -142,17 +142,9 @@ class ContentBlock:
     @property
     def effective_version(self) -> str:
         """Return the content version currently selected for export."""
-        if (
-            self.selected_version == "edited"
-            and self.edited_text is not None
-            and self.edited_validation_level != "conflict"
-        ):
+        if self.selected_version == "edited" and self.edited_text is not None:
             return "edited"
-        if (
-            self.selected_version == "generated"
-            and self.generated_text is not None
-            and self.validation_level != "conflict"
-        ):
+        if self.selected_version == "generated" and self.generated_text is not None:
             return "generated"
         if self.selected_version == "original":
             return "original"

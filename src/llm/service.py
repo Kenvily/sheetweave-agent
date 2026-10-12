@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Sequence
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, replace
 from enum import Enum
 
@@ -290,9 +291,11 @@ def _warning_lines(result: ValidationResult, *, correction_failed: bool = False)
         for issue in result.issues
     )
     if correction_failed:
-        return (*lines, "严重冲突定向修正后仍未通过，最终文档已自动使用原文。")
+        return (*lines, "定向修正后仍有事实告警，请核对后谨慎采用。")
+    if result.level is ValidationLevel.CONFLICT:
+        return (*lines, "候选需谨慎使用，可编辑修正或确认告警后采用。")
     if result.level is ValidationLevel.REVIEW:
-        return (*lines, "该候选文本待人工确认，最终文档暂时使用原文。")
+        return (*lines, "该候选文本待人工核对，可确认后采用。")
     return lines
 
 
@@ -338,11 +341,21 @@ class LLMService:
         config.require_available()
         client = self._client or OpenAICompatibleClient(config)
         candidates: dict[str, str] = {}
-        for batch in _batches(editable, config.max_batch_chars):
+
+        def generate_batch(batch: tuple[ContentBlock, ...]) -> dict[str, str]:
             response = client.complete(
                 _messages(prepared, batch, selected_mode, custom_instruction), config.model
             )
-            candidates.update(_decode_response(response, tuple(block.block_id for block in batch)))
+            return _decode_response(response, tuple(block.block_id for block in batch))
+
+        batches = _batches(editable, config.max_batch_chars)
+        if len(batches) > 1 and config.max_concurrency > 1:
+            with ThreadPoolExecutor(max_workers=config.max_concurrency) as executor:
+                for generated in executor.map(generate_batch, batches):
+                    candidates.update(generated)
+        else:
+            for batch in batches:
+                candidates.update(generate_batch(batch))
 
         validations = {
             block.block_id: validate_generated_text(
@@ -356,7 +369,7 @@ class LLMService:
             if validations[block.block_id].level is ValidationLevel.CONFLICT
         )
         correction_attempted: set[str] = set()
-        if conflicts:
+        if conflicts and config.auto_correct:
             correction_attempted = {block.block_id for block in conflicts}
             try:
                 response = client.complete(

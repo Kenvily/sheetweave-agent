@@ -10,6 +10,11 @@ from weekly_report_agent.llm.validation import ValidationLevel, validate_generat
         ("抽取5千样本", "抽取5000样本"),
         ("2026年10月12日复核", "2026-10-12复核"),
         ("部署已经完成，调试进行中", "部署已完成，调试正在进行"),
+        ("部署和调试已完成，验证进行中", "部署与调试已完成，验证进行中"),
+        (
+            "模型在1万oot上效果ks是62.5%，lgb在1万oot上效果ks是56.5%。",
+            "模型在 1 万 oot 上效果 KS 为 62.5%，LightGBM 在 1 万 oot 上效果 KS 为 56.5%。",
+        ),
     ],
 )
 def test_normalized_equivalent_facts_pass(original: str, generated: str) -> None:
@@ -24,6 +29,7 @@ def test_normalized_equivalent_facts_pass(original: str, generated: str) -> None
         ("提升3%", "提升3个百分点", "百分"),
         ("部署已完成，调试进行中", "部署进行中，调试已完成", "状态疑似"),
         ("抽取5000样本", "抽取6000样本", "数量"),
+        ("在1万oot上验证", "在 2 万 oot 上验证", "数量"),
         ("2026年10月12日复核", "2026年10月13日复核", "日期"),
     ],
 )

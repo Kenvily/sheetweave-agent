@@ -7,7 +7,7 @@ This repository is the starting point for a weekly-report generation agent. Curr
 - `data/周报.csv`: raw project and weekly progress records with multi-row headers.
 - `data/研发三部周报模板.docx`: formatting rules and an example target document.
 
-Keep these files unchanged as reproducible fixtures. Place application code in `src/weekly_report_agent/`, tests in `tests/`, generated reports in `output/`, and developer scripts in `scripts/`. Do not commit generated `.docx` files unless they are intentional test fixtures.
+Keep these files unchanged as reproducible fixtures. Place application code in `src/`, tests in `tests/`, generated reports in `outputs/`, and developer scripts in `scripts/`. Do not commit generated `.docx` files unless they are intentional test fixtures.
 
 ## Architecture and Data Rules
 

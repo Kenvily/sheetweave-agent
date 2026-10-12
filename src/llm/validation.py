@@ -23,7 +23,7 @@ class ValidationLevel(IntEnum):
         return {
             ValidationLevel.PASS: "通过",
             ValidationLevel.REVIEW: "待人工确认",
-            ValidationLevel.CONFLICT: "严重冲突",
+            ValidationLevel.CONFLICT: "谨慎使用",
         }[self]
 
 
@@ -155,6 +155,7 @@ def _anchor_tokens(anchor: str | None) -> set[str]:
     if not anchor:
         return set()
     normalized = re.sub(r"\s+", "", anchor.lower())
+    normalized = re.sub(r"[和与及]", "", normalized)
     ascii_words = set(re.findall(r"[a-z][a-z0-9_.-]*", normalized))
     chinese = "".join(re.findall(r"[\u4e00-\u9fff]", normalized))
     bigrams = {chinese[index : index + 2] for index in range(len(chinese) - 1)}

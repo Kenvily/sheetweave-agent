@@ -38,3 +38,12 @@ def test_quantity_date_and_status_equivalent_forms_are_normalized() -> None:
 
     assert [fact.identity for fact in source] == [fact.identity for fact in generated]
     assert _facts("百擎部署", FactKind.PLAIN_NUMBER) == []
+
+
+def test_spaced_scales_and_metric_copula_keep_numeric_identity() -> None:
+    facts = extract_facts("在 1 万 oot 上效果 ks是62.5%")
+    assert [(f.value, f.unit) for f in facts if f.kind is FactKind.QUANTITY] == [("10000", None)]
+    assert [(f.name, f.value, f.unit) for f in facts if f.kind is FactKind.METRIC] == [
+        ("ks", "62.5", "%")
+    ]
+    assert not [f for f in facts if f.kind in {FactKind.PLAIN_NUMBER, FactKind.PERCENT}]

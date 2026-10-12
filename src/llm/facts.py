@@ -62,7 +62,7 @@ class Fact:
 
 NUMBER_TEXT = r"(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?"
 CHINESE_NUMBER_TEXT = r"[零〇一二两三四五六七八九十百千万亿]+"
-NUMBER_WITH_SCALE = rf"(?:{NUMBER_TEXT}[千万亿]?|{CHINESE_NUMBER_TEXT})"
+NUMBER_WITH_SCALE = rf"(?:{NUMBER_TEXT}(?:[ \t]*[千万亿])?|{CHINESE_NUMBER_TEXT})"
 COMPARISON_PREFIX = (
     r"(?P<prefix><=|>=|[<>≤≥]|不超过|小于等于|至多|不低于|不少于|"
     r"大于等于|至少|小于|低于|大于|高于)?"
@@ -112,7 +112,7 @@ TECHNICAL_PATTERN = re.compile(
 )
 
 METRIC_PATTERN = re.compile(
-    rf"(?P<name>AUC|KS|PSI)[ \t]*(?:提升|下降|变化|达到|约为|为|约|[:：=])?[ \t]*"
+    rf"(?P<name>AUC|KS|PSI)[ \t]*(?:提升|下降|变化|达到|约为|为|是|约|[:：=])?[ \t]*"
     rf"{COMPARISON_PREFIX}[ \t]*(?P<first>{NUMBER_WITH_SCALE})"
     rf"(?:[ \t]*(?:-|—|–|~|～|至|到)[ \t]*(?P<second>{NUMBER_WITH_SCALE}))?"
     rf"[ \t]*(?P<unit>个百分点|个点|点|pp|%|％)?[ \t]*{COMPARISON_SUFFIX}",
@@ -236,6 +236,7 @@ def _chinese_integer(raw: str) -> Decimal:
 
 def canonical_number(raw: str) -> str:
     """Normalize Arabic/Chinese numbers and Chinese scale suffixes."""
+    raw = re.sub(r"\s+", "", raw)
     multiplier = Decimal("1")
     if raw and raw[-1] in "千万亿" and raw[:-1] and raw[:-1][-1].isdigit():
         multiplier = {
@@ -390,6 +391,8 @@ def extract_facts(text: str) -> tuple[Fact, ...]:
         if _overlaps(match.span(), occupied):
             continue
         raw_number = match.group("number")
+        if raw_number in {"千", "万", "亿"}:
+            continue
         unit = match.group("unit")
         scaled = bool(raw_number and raw_number[-1:] in "千万亿")
         if not unit and not scaled:

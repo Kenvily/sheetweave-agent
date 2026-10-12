@@ -2,6 +2,7 @@ import json
 from collections.abc import Sequence
 from dataclasses import replace
 from pathlib import Path
+from threading import Barrier
 
 import pytest
 
@@ -161,7 +162,7 @@ def test_fact_conflict_is_retained_for_review_and_falls_back_per_block(tmp_path:
     payload = {"blocks": [{"block_id": block.block_id, "text": unsafe}]}
     client = FakeClient(response=json.dumps(payload))
 
-    result = _service(client).process(prepared, "polish")
+    result = _service(client, auto_correct=True).process(prepared, "polish")
     checked = result.block_by_id(block.block_id)
 
     assert len(client.calls) == 2  # one normal call and at most one targeted correction
@@ -172,6 +173,37 @@ def test_fact_conflict_is_retained_for_review_and_falls_back_per_block(tmp_path:
         "AUC 0.81" in warning and "AUC 0.91" in warning for warning in checked.validation_warnings
     )
     assert all(item.generated_text is None for item in result.blocks if not item.llm_editable)
+
+
+def test_default_processing_does_not_request_second_pass_correction(tmp_path: Path) -> None:
+    prepared = _prepared(tmp_path)
+    block = prepared.blocks[0]
+    unsafe = block.original_text.replace("0.81", "0.91")
+    client = FakeClient(
+        response=json.dumps({"blocks": [{"block_id": block.block_id, "text": unsafe}]})
+    )
+    result = _service(client).process(prepared, "polish")
+    assert len(client.calls) == 1
+    assert result.blocks[0].validation_level == "conflict"
+    assert result.blocks[0].effective_text == block.original_text
+
+
+def test_batches_run_concurrently_and_keep_block_identity(tmp_path: Path) -> None:
+    prepared = _prepared(tmp_path)
+    block = prepared.blocks[0]
+    prepared = replace(prepared, blocks=(block, replace(block, block_id="second-block")))
+    barrier = Barrier(2)
+
+    class ParallelClient(FakeClient):
+        def complete(self, messages, model):
+            barrier.wait(timeout=3)
+            return super().complete(messages, model)
+
+    client = ParallelClient()
+    result = _service(client, max_batch_chars=1, max_concurrency=2).process(prepared, "polish")
+    assert len(client.calls) == 2
+    assert tuple(item.block_id for item in result.blocks) == (block.block_id, "second-block")
+    assert all(item.validation_level == "pass" for item in result.blocks)
 
 
 def test_equivalent_numeric_formatting_and_list_renumbering_are_accepted(tmp_path: Path) -> None:
