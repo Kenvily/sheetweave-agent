@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import replace
 from datetime import date
 from pathlib import Path
@@ -49,6 +50,7 @@ def process_report(
     custom_instruction: str | None = None,
     model: str | None = None,
     llm_service: LLMService | None = None,
+    on_delta: Callable[[int, str], None] | None = None,
 ) -> PreparedReport:
     """Apply a content mode while keeping original mode fully offline."""
     mode = parse_content_mode(content_mode)
@@ -71,6 +73,7 @@ def process_report(
         mode,
         custom_instruction=custom_instruction,
         model=model,
+        on_delta=on_delta,
     )
 
 

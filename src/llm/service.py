@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, replace
 from enum import Enum
 
 from weekly_report_agent.models import ContentBlock, PreparedReport
+from weekly_report_agent.timing import TimingRecorder, measure
 
 from .client import LLMClient, OpenAICompatibleClient
 from .config import LLMConfig
@@ -302,9 +303,16 @@ def _warning_lines(result: ValidationResult, *, correction_failed: bool = False)
 class LLMService:
     """Process editable content through an injectable client and graded validator."""
 
-    def __init__(self, config: LLMConfig, client: LLMClient | None = None) -> None:
+    def __init__(
+        self,
+        config: LLMConfig,
+        client: LLMClient | None = None,
+        *,
+        timings: TimingRecorder | None = None,
+    ) -> None:
         self.config = config
         self._client = client
+        self._timings = timings
 
     def process(
         self,
@@ -313,6 +321,7 @@ class LLMService:
         *,
         custom_instruction: str | None = None,
         model: str | None = None,
+        on_delta: Callable[[int, str], None] | None = None,
     ) -> PreparedReport:
         """Return generated candidates while unsafe blocks automatically use source text."""
         selected_mode = parse_content_mode(mode)
@@ -339,30 +348,42 @@ class LLMService:
             )
         config = self.config.select_model(model)
         config.require_available()
-        client = self._client or OpenAICompatibleClient(config)
+        client = self._client or OpenAICompatibleClient(config, timings=self._timings)
         candidates: dict[str, str] = {}
 
-        def generate_batch(batch: tuple[ContentBlock, ...]) -> dict[str, str]:
-            response = client.complete(
-                _messages(prepared, batch, selected_mode, custom_instruction), config.model
-            )
-            return _decode_response(response, tuple(block.block_id for block in batch))
+        def generate_batch(item: tuple[int, tuple[ContentBlock, ...]]) -> dict[str, str]:
+            index, batch = item
+            with measure(self._timings, "llm_batch", blocks=len(batch)):
+                messages = _messages(prepared, batch, selected_mode, custom_instruction)
+                stream = getattr(client, "stream", None)
+                if on_delta is not None and callable(stream):
+                    chunks = []
+                    for chunk in stream(messages, config.model):
+                        on_delta(index, chunk)
+                        chunks.append(chunk)
+                    response = "".join(chunks)
+                else:
+                    response = client.complete(messages, config.model)
+                    if on_delta is not None:
+                        on_delta(index, response)
+                return _decode_response(response, tuple(block.block_id for block in batch))
 
         batches = _batches(editable, config.max_batch_chars)
         if len(batches) > 1 and config.max_concurrency > 1:
             with ThreadPoolExecutor(max_workers=config.max_concurrency) as executor:
-                for generated in executor.map(generate_batch, batches):
+                for generated in executor.map(generate_batch, enumerate(batches, start=1)):
                     candidates.update(generated)
         else:
-            for batch in batches:
-                candidates.update(generate_batch(batch))
+            for item in enumerate(batches, start=1):
+                candidates.update(generate_batch(item))
 
-        validations = {
-            block.block_id: validate_generated_text(
-                block.original_text, candidates[block.block_id], selected_mode.value
-            )
-            for block in editable
-        }
+        with measure(self._timings, "fact_validation", blocks=len(editable)):
+            validations = {
+                block.block_id: validate_generated_text(
+                    block.original_text, candidates[block.block_id], selected_mode.value
+                )
+                for block in editable
+            }
         conflicts = tuple(
             block
             for block in editable
@@ -372,17 +393,18 @@ class LLMService:
         if conflicts and config.auto_correct:
             correction_attempted = {block.block_id for block in conflicts}
             try:
-                response = client.complete(
-                    _correction_messages(
-                        prepared,
-                        conflicts,
-                        candidates,
-                        validations,
-                        selected_mode,
-                        custom_instruction,
-                    ),
-                    config.model,
-                )
+                with measure(self._timings, "llm_correction", blocks=len(conflicts)):
+                    response = client.complete(
+                        _correction_messages(
+                            prepared,
+                            conflicts,
+                            candidates,
+                            validations,
+                            selected_mode,
+                            custom_instruction,
+                        ),
+                        config.model,
+                    )
                 corrected = _decode_response(response, tuple(block.block_id for block in conflicts))
             except (LLMResponseError, RuntimeError):
                 corrected = {}

@@ -16,7 +16,19 @@ from datetime import date
 from pathlib import Path
 from xml.etree import ElementTree as ET
 
-from flask import Flask, g, jsonify, redirect, render_template, request, send_file, url_for
+from flask import (
+    Flask,
+    Response,
+    copy_current_request_context,
+    g,
+    jsonify,
+    redirect,
+    render_template,
+    request,
+    send_file,
+    stream_with_context,
+    url_for,
+)
 from werkzeug.datastructures import FileStorage
 from werkzeug.exceptions import RequestEntityTooLarge
 
@@ -47,6 +59,7 @@ from .service import (
 )
 from .stats import UsageMetrics, UsageStats
 from .web_sessions import ReportSession, SessionConflictError, SnapshotStore
+from .web_stream import GenerationCancelled, stream_events
 
 DEFAULT_TEMPLATE = Path("data/研发三部周报模板.docx")
 DOCX_MIME_TYPE = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
@@ -491,74 +504,135 @@ def create_app(
         """Return stale or directly opened preview URLs to the upload form."""
         return redirect(url_for("index"))
 
+    def build_preview(
+        on_delta=None, progress=lambda _message: None, input_path=None, template_path=None
+    ):
+        """Generate one fully checked snapshot for either HTML or SSE delivery."""
+        upload = _data_upload()
+        if upload is None:
+            raise ValueError("请选择周报 CSV 或 XLSX 文件。")
+        progress("正在解析表格与规则。")
+        preset = load_rule_preset(request.form.get("preset", "rd3"))
+        report_date = _parse_date(request.form.get("report_date", ""))
+        section_number = _parse_section_number(request.form.get("section_number", ""), preset)
+        mode, instruction, model = process_options()
+        with tempfile.TemporaryDirectory(prefix="weekly-report-preview-") as directory:
+            workdir = Path(directory)
+            source_path = input_path or save_input(upload, workdir)
+            prepared, preset = prepare_report(
+                source_path,
+                preset_id=preset.id,
+                requested_week=request.form.get("week", "").strip() or None,
+                sheet=request.form.get("sheet", "").strip() or None,
+                field_mapping=_field_mapping(),
+                display_filename=upload.filename,
+            )
+            progress(
+                "正在规范化原文。"
+                if mode is ContentMode.ORIGINAL
+                else "正在生成候选内容，流式内容尚未校验。"
+            )
+            prepared = process_report(
+                prepared,
+                mode,
+                custom_instruction=instruction,
+                model=model,
+                llm_service=app.config.get("LLM_SERVICE"),
+                on_delta=on_delta,
+            )
+            progress("候选已完成校验，正在生成并验证 DOCX。")
+            output_path = workdir / "report.docx"
+            template = template_path or selected_template(workdir)
+            render_prepared_report(
+                prepared,
+                preset,
+                template,
+                output_path,
+                report_date,
+                section_number,
+            )
+            progress("DOCX 验证通过，正在保存审核快照。")
+            filename = f"{preset.name}-{report_date:%Y%m%d}.docx"
+            snapshot_token = app.config["SNAPSHOT_STORE"].create_session(
+                prepared,
+                preset_id=preset.id,
+                report_date=report_date,
+                section_number=section_number,
+                content_mode=mode.value,
+                custom_instruction=instruction,
+                model=model,
+                template_content=template.read_bytes(),
+                report_content=output_path.read_bytes(),
+                download_name=filename,
+            )
+        submitted_task_id = request.form.get("generation_task_id", "").strip()
+        preview_task_id = (
+            submitted_task_id
+            if ANONYMOUS_ID_PATTERN.fullmatch(submitted_task_id)
+            else snapshot_token
+        )
+        safe_record_generation(f"preview:{preview_task_id}")
+        return snapshot_token
+
     @app.post("/preview")
     def preview():
-        upload = _data_upload()
         try:
+            token = build_preview()
+            return show_workspace(app.config["SNAPSHOT_STORE"].load_session(token))
+        except (OSError, ValueError, LLMClientError, zipfile.BadZipFile, ET.ParseError) as exc:
+            return show_form(error=str(exc), status=400)
+
+    @app.post("/preview-stream")
+    def preview_stream():
+        """Stream provisional model content; publish only a completed validated snapshot."""
+        upload_work = tempfile.TemporaryDirectory(prefix="weekly-report-stream-upload-")
+        try:
+            upload = _data_upload()
             if upload is None:
                 raise ValueError("请选择周报 CSV 或 XLSX 文件。")
-            preset = load_rule_preset(request.form.get("preset", "rd3"))
-            report_date = _parse_date(request.form.get("report_date", ""))
-            section_number = _parse_section_number(request.form.get("section_number", ""), preset)
-            mode, instruction, model = process_options()
-            with tempfile.TemporaryDirectory(prefix="weekly-report-preview-") as directory:
-                workdir = Path(directory)
-                input_path = save_input(upload, workdir)
-                prepared, preset = prepare_report(
-                    input_path,
-                    preset_id=preset.id,
-                    requested_week=request.form.get("week", "").strip() or None,
-                    sheet=request.form.get("sheet", "").strip() or None,
-                    field_mapping=_field_mapping(),
-                    display_filename=upload.filename,
+            saved_input = save_input(upload, Path(upload_work.name))
+            saved_template = selected_template(Path(upload_work.name))
+        except (OSError, ValueError, zipfile.BadZipFile) as exc:
+            upload_work.cleanup()
+            return jsonify(error=str(exc)), 400
+
+        @copy_current_request_context
+        def generate(emit):
+            try:
+                token = build_preview(
+                    on_delta=lambda batch, text: emit("delta", {"batch": batch, "text": text}),
+                    progress=lambda message: emit("progress", {"message": message}),
+                    input_path=saved_input,
+                    template_path=saved_template,
                 )
-                prepared = process_report(
-                    prepared,
-                    mode,
-                    custom_instruction=instruction,
-                    model=model,
-                    llm_service=app.config.get("LLM_SERVICE"),
+                emit(
+                    "complete",
+                    {
+                        "url": url_for("workspace", token=token),
+                        "download_url": url_for("download_snapshot", token=token),
+                    },
                 )
-                output_path = workdir / "report.docx"
-                template = selected_template(workdir)
-                render_prepared_report(
-                    prepared,
-                    preset,
-                    template,
-                    output_path,
-                    report_date,
-                    section_number,
-                )
-                filename = f"{preset.name}-{report_date:%Y%m%d}.docx"
-                snapshot_token = app.config["SNAPSHOT_STORE"].create_session(
-                    prepared,
-                    preset_id=preset.id,
-                    report_date=report_date,
-                    section_number=section_number,
-                    content_mode=mode.value,
-                    custom_instruction=instruction,
-                    model=model,
-                    template_content=template.read_bytes(),
-                    report_content=output_path.read_bytes(),
-                    download_name=filename,
-                )
-            submitted_task_id = request.form.get("generation_task_id", "").strip()
-            preview_task_id = (
-                submitted_task_id
-                if ANONYMOUS_ID_PATTERN.fullmatch(submitted_task_id)
-                else snapshot_token
-            )
-            safe_record_generation(f"preview:{preview_task_id}")
-            return show_workspace(app.config["SNAPSHOT_STORE"].load_session(snapshot_token))
-        except (
-            FileNotFoundError,
-            OSError,
-            ValueError,
-            LLMClientError,
-            zipfile.BadZipFile,
-            ET.ParseError,
-        ) as exc:
-            return show_form(error=str(exc), status=400)
+            except GenerationCancelled:
+                raise
+            except (OSError, ValueError, LLMClientError, zipfile.BadZipFile, ET.ParseError) as exc:
+                emit("error", {"message": str(exc)})
+            except Exception as exc:
+                app.logger.error("流式生成失败（%s）。", type(exc).__name__)
+                emit("error", {"message": "生成失败，请重试或切换原文模式。"})
+
+        def deliver():
+            try:
+                yield from stream_events(generate)
+            finally:
+                upload_work.cleanup()
+
+        response = Response(
+            stream_with_context(deliver()),
+            mimetype="text/event-stream",
+            headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"},
+        )
+        response.call_on_close(upload_work.cleanup)
+        return response
 
     @app.get("/workspace/<token>")
     def workspace(token: str):

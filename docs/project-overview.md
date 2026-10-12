@@ -35,7 +35,7 @@
 | `build/`、`dist/` | 打包时可能生成的产物，忽略 Git，可重新生成 |
 | `__pycache__/`、`.pytest_cache/`、`.ruff_cache/` | 运行或检查生成的缓存，忽略 Git，可重新生成 |
 
-`scripts/` 是未来维护脚本的约定位置，当前没有需要保留的开发脚本，不为目录树创建空目录。`.git/` 属于 Git；环境提供的隐藏工具目录不属于业务源码，不擅自清理。
+`scripts/benchmark_timing.py` 是当前开发测速脚本，默认使用合成数据和 Mock，可在显式授权后调用真实 API。`.git/` 属于 Git；环境提供的隐藏工具目录不属于业务源码，不擅自清理。
 
 ### 应用模块
 
@@ -44,6 +44,8 @@
 | `src/__init__.py` | Python 逻辑包的初始化 |
 | `src/__main__.py` | `python -m weekly_report_agent` 的执行入口，调用 CLI |
 | `src/cli.py` | 解析输入、模板、周次、日期、模式和外发确认等参数 |
+| `src/web_stream.py` | 有界 SSE 队列、心跳和浏览器断开后的协作式取消 |
+| `src/static/stream.js` | 接收 SSE、合并各批次 JSON 分片并提取临时候选正文，安全更新页面 |
 | `src/web.py` | Flask 应用工厂与上传、预览、审核、PDF、下载、帮助和示例路由 |
 | `src/service.py` | 组织完整流水线，以及人工编辑、版本采用、计划生成和渲染校验 |
 | `src/input_parser.py` | CSV/XLSX 读取、Sheet/周次选择、字段映射、原物理行位置和输入告警 |
@@ -57,6 +59,7 @@
 | `src/validator.py` | 输出编号、文字、字体、字号、缩进、间距、页面设置和包结构验收 |
 | `src/web_sessions.py` | 随机令牌会话、受限磁盘快照、文件锁、revision、过期清理及 PDF 绑定 |
 | `src/pdf_preview.py` | 独立临时 LibreOffice profile 的 headless DOCX→PDF 转换，处理超时和失败 |
+| `src/timing.py` | 可选线程安全阶段计时器，仅记录阶段名、数字和成功状态 |
 | `src/stats.py` | SQLite 聚合计数、匿名访客、访问次数、生成幂等、持久密钥和旧库迁移 |
 
 ### 子目录与资源
@@ -94,6 +97,8 @@
 | `test_m2_web_generation.py`、`test_m3_workspace.py` | 模型候选、编辑、确认采用、刷新保持、Diff、revision 与快照导出 |
 | `test_m4_document_preview.py` | 包安全、页面设置、PDF 失败和 revision 绑定 |
 | `test_m5_stats_help.py` | 统计持久化、旧库迁移、访问口径、并发写入、帮助与示例 |
+| `test_streaming.py` | API 流式解析、重试边界、提前显示、断流、取消、事实回退和离线模式 |
+| `test_timing.py` | 失败阶段计时、并发记录、HTTP 重试计数及敏感内容不进入统计 |
 | `test_docx.py`、`test_end_to_end.py` | 格式属性、原 CLI 与完整生成流程 |
 
 ## 3. 物理布局与 Python 包名
@@ -157,7 +162,7 @@ Harness 是 service、LLM、验证和会话模块之间的控制逻辑，不是�
 4. **事实校验**：识别事实类型、值、单位、版本和文本跨度；对“和/与/及”做动作锚点归一，数值和版本变化仍提示。
 5. **采用策略**：PASS 自动采用；REVIEW 默认原文，可显式采用；CONFLICT 显示“谨慎使用”，默认原文，核对并勾选确认后允许采用，校验告警继续保留。人工编辑不执行模型事实校验，独立 Diff 弹窗确认后直接生效；未确认不写入会话。
 6. **失败处理**：默认不进行模型二次修正；开启 LLM_AUTO_CORRECT 后只尝试一轮冲突块修正。首次网络请求失败或 JSON/ID 结构不合法会终止本次生成，不自动导出原文 DOCX；可改用 original 重试。
-7. **性能**：批次默认最多两个并行，可配置 1～4；单批次不受益于批次并发。HTTP 重试与定向修正是不同机制，没有真实 API 提速幅度的实测结论。
+7. **性能**：批次默认最多两个并行，可配置 1～4；单批次不受益于批次并发。HTTP 重试与定向修正是不同机制，已有一次合成 API 计时样本，但没有重复采样或稳定提速幅度结论。
 
 事实检查依赖规则与启发式，不证明所有文字语义正确。人工确认是明确采用动作，不会把模型自述当成校验结果。
 
@@ -204,3 +209,9 @@ M0～M3、M5 已实现，M4 为 DOCX 安全与 PDF 的第一阶段、多模板�
 共享服务默认使用 gthread Worker、每 Worker 两个线程、180 秒超时和退出宽限；模型等待不会阻断 Worker 心跳。慢速 Mock LLM 已复现同步 Worker 超时返回 500，并验证线程 Worker 返回 200；SIGKILL 日志中的 OOM 提示不等于内核确认的 OOM。
 
 旧审核会话保存的模型校验结果不会因规则更新自动重算，避免静默改变已选择内容；新生成候选使用更新后的识别规则。
+
+## 10. Web 流式返回
+
+首页使用 fetch POST `/preview-stream`，服务器先保存上传文件，后台复用同一生成流水线。LLM 客户端读取上游 SSE 的 `delta.content`，服务层按批次 ID 转发到有界队列；浏览器接收 progress / delta / complete / error，增量提取 JSON 中的正文，不渲染模型原始 HTML。并发批次各自展示，避免内容混合。
+
+这些文字是未校验的临时候选。全部批次结束后仍解析完整 JSON、核对块 ID、校验事实、应用原有采用与回退规则，再生成并验证 DOCX 和保存会话。complete 返回审核与下载地址，下载复用已完成快照。CLI 与同步接口兼容。每 5 秒心跳保持反馈；浏览器取消会在后续输出处停止处理，上游阻塞读取仍等待超时。首片段后断流不会重新请求并拼接旧内容，失败不产生可导出的半成品。

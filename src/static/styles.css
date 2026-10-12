@@ -666,3 +666,8 @@ button.preview-tab.active { color: #fff; background: var(--accent); }
 .candidate-full-text p { white-space: pre-wrap; overflow-wrap: anywhere; }
 .candidate-warning-summary { margin: 8px 0; padding-left: 22px; font-size: .82rem; }
 .candidate-warning-details { margin-bottom: 12px; }
+
+.processing-panel:has(.stream-candidates:not([hidden])) { width: min(760px, calc(100vw - 32px)); }
+.stream-candidates { max-height: 50vh; overflow: auto; margin: 16px 0; text-align: left; }
+.stream-candidates pre { white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; line-height: 1.7; }
+.stream-candidates section { padding: 10px; border-top: 1px solid var(--line); }

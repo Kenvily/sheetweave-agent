@@ -24,7 +24,7 @@
     <section class="card">
       {% if error %}<div class="alert" role="alert">{{ error }}</div>{% endif %}
 
-      <form id="report-form" action="{{ url_for('generate') }}" method="post" enctype="multipart/form-data">
+      <form data-stream-url="{{ url_for('preview_stream') }}" id="report-form" action="{{ url_for('generate') }}" method="post" enctype="multipart/form-data">
         <input type="hidden" name="generation_task_id" value="{{ generation_task_id }}">
         <div class="grid">
           <label class="field">
@@ -197,8 +197,14 @@
       <span class="spinner" aria-hidden="true"></span>
       <strong id="processing-title">正在处理周报</strong>
       <p id="processing-message">请保持页面打开，完成后会自动显示结果。</p>
+      <div id="stream-candidates" class="stream-candidates" hidden>
+        <p>生成中的临时候选 · 尚未校验，不代表最终导出内容</p>
+        <div data-stream-batches></div>
+      </div>
+      <button type="button" class="secondary" id="cancel-generation" hidden>取消生成</button>
     </div>
   </div>
+  <script src="{{ url_for('static', filename='stream.js') }}"></script>
   <script>
     (() => {
       const form = document.getElementById("report-form");
@@ -324,37 +330,73 @@
         URL.revokeObjectURL(url);
       };
 
+      let generationController;
+      const streamCandidates = document.getElementById("stream-candidates");
+      const streamBatches = streamCandidates.querySelector("[data-stream-batches]");
+      const cancelGeneration = document.getElementById("cancel-generation");
+      cancelGeneration.addEventListener("click", () => generationController?.abort());
       form.addEventListener("submit", async (event) => {
-        const submitter = event.submitter;
-        const target = submitter?.formAction || form.action;
+        event.preventDefault();
+        const target = event.submitter?.formAction || form.action;
         const isPreview = target.endsWith("/preview");
         const mode = form.elements.content_mode.value;
+        const streaming = isPreview || mode !== "original";
         title.textContent = isPreview ? "正在生成预览" : "正在生成 DOCX";
         message.textContent = mode === "original"
           ? "正在解析数据并应用排版规则，请稍候。"
-          : "正在调用 DeepSeek 整理内容并校验事实，请稍候。";
+          : "正在连接模型，收到内容后会逐步显示。";
+        streamBatches.replaceChildren();
+        streamCandidates.hidden = true;
+        generationController = new AbortController();
+        cancelGeneration.hidden = false;
         setProcessing(true);
-        if (isPreview) return;
-
-        event.preventDefault();
-        try {
-          const response = await fetch(target, {
-            method: "POST",
-            body: new FormData(form),
-          });
-          if (!response.ok || response.headers.get("Content-Type")?.includes("text/html")) {
-            document.open();
-            document.write(await response.text());
-            document.close();
-            return;
-          }
-          await downloadResponse(response);
+        const resetTaskId = () => {
           form.elements.generation_task_id.value = crypto.randomUUID
-            ? crypto.randomUUID()
-            : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
-        } catch (_error) {
-          window.alert("生成请求失败，请检查网络连接后重试。");
+            ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+        };
+        try {
+          if (streaming) {
+            const batchElements = new Map();
+            await window.streamWeeklyReport({
+              form, signal: generationController.signal,
+              onProgress: (text) => { message.textContent = text; },
+              onBatch: (batch, text) => {
+                let element = batchElements.get(batch);
+                if (!element) {
+                  const section = document.createElement("section");
+                  const heading = document.createElement("strong");
+                  heading.textContent = `候选内容 ${batch}`;
+                  element = document.createElement("pre");
+                  section.append(heading, element);
+                  streamBatches.append(section);
+                  batchElements.set(batch, element);
+                }
+                element.textContent = text;
+                streamCandidates.hidden = false;
+              },
+              onComplete: async (payload) => {
+                if (isPreview) window.location.assign(payload.url);
+                else {
+                  const response = await fetch(payload.download_url, {signal: generationController.signal});
+                  if (!response.ok) throw new Error("报告已生成，但下载失败，请重试。");
+                  await downloadResponse(response);
+                  resetTaskId();
+                }
+              },
+            });
+          } else {
+            const response = await fetch(target, {
+              method: "POST", body: new FormData(form), signal: generationController.signal,
+            });
+            if (!response.ok || response.headers.get("Content-Type")?.includes("text/html")) {
+              document.open(); document.write(await response.text()); document.close();
+            } else { await downloadResponse(response); resetTaskId(); }
+          }
+        } catch (error) {
+          if (error.name !== "AbortError") window.alert(error.message || "生成请求失败，请重试。");
         } finally {
+          generationController = null;
+          cancelGeneration.hidden = true;
           setProcessing(false);
         }
       });
