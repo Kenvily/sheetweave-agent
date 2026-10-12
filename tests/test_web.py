@@ -25,7 +25,7 @@ def test_get_only_form_targets_redirect_to_home() -> None:
         page = client.get(path, follow_redirects=True)
         assert page.status_code == 200
         assert page.request.path == "/"
-        assert "研发周报生成器" in page.text
+        assert "整理这一周的进展" in page.text
 
 
 def test_root_post_compatibly_generates_instead_of_returning_405() -> None:
@@ -48,7 +48,7 @@ def test_web_page_is_simple_and_has_rule_parameters() -> None:
     response = _client().get("/")
 
     assert response.status_code == 200
-    assert "研发周报生成器" in response.text
+    assert "整理这一周的进展" in response.text
     assert 'name="csv_file"' in response.text
     assert 'name="section_number"' in response.text
     assert 'name="content_mode"' in response.text
@@ -124,7 +124,9 @@ def test_web_week_and_sheet_are_selects_and_section_is_text_input() -> None:
         assert f'<select name="{name}">' in response.text
     assert '<input type="text" name="section_number"' in response.text
     assert 'formaction="/generate"' in response.text
-    advanced = response.text.split("<details>", 1)[1].split("</details>", 1)[0]
+    advanced = response.text.split('<details class="advanced-settings">', 1)[1].split(
+        "</details>", 1
+    )[0]
     assert "高级适配设置" in advanced
     assert 'name="section_number"' not in advanced
     assert "自定义模板（可选）" in advanced

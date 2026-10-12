@@ -7,28 +7,25 @@
   <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
 </head>
 <body>
-  <main class="container{% if prepared %} container-wide{% endif %}">
-    <header class="app-header">
-      <div class="app-brand"><span class="app-mark" aria-hidden="true">W</span><h1>研发周报生成器</h1></div>
-      <a class="header-link" href="{{ url_for('help_page') }}">使用帮助</a>
+  {% from '_navigation.html' import navigation %}
+  {{ navigation('create') }}
+  <main id="main-content" class="container{% if prepared %} container-wide{% endif %}" tabindex="-1">
+    <header class="page-intro">
+      <div><p class="eyebrow">从工作记录到正式周报</p><h1>整理这一周的进展</h1><p class="page-description">上传表格，选择整理方式。审核内容后，导出格式统一的周报。</p></div>
+      <span class="intro-tag">CSV / XLSX → DOCX</span>
     </header>
-
-    <section class="usage-stats" aria-label="匿名使用统计">
-      <article><strong>{{ usage_metrics.total_generations }}</strong><span>累计成功生成</span></article>
-      <article><strong>{{ usage_metrics.weekly_generations }}</strong><span>本周成功生成</span></article>
-      <article><strong>{{ usage_metrics.estimated_visitors }}</strong><span>独立访客（估算）</span></article>
-      <article><strong>{{ usage_metrics.page_views }}</strong><span>访问次数</span></article>
-    </section>
-    {% if not stats_available %}<p role="status">统计暂不可用，请检查服务端统计存储配置。</p>{% endif %}
-
-    <section class="card">
-      {% if error %}<div class="alert" role="alert">{{ error }}</div>{% endif %}
-
+    <ol class="workflow" aria-label="周报生成流程"><li aria-current="step"><span>01</span>上传与配置</li><li><span>02</span>审核与调整</li><li><span>03</span>确认并导出</li></ol>
+    <div class="create-layout">
+    <section class="card configuration-card" aria-label="周报生成配置">
+      <div class="section-head"><div><h2>新建周报</h2><p class="section-description">完成以下配置，再进入审核工作区。</p></div><span class="badge">第一步</span></div>
+      {% if error %}<div class="alert" role="alert" tabindex="-1">{{ error }}</div>{% endif %}
       <form data-stream-url="{{ url_for('preview_stream') }}" id="report-form" action="{{ url_for('generate') }}" method="post" enctype="multipart/form-data">
         <input type="hidden" name="generation_task_id" value="{{ generation_task_id }}">
-        <div class="grid">
-          <label class="field">
+        <fieldset class="form-section"><legend><span class="step-number">1</span>选择数据来源</legend>
+        <div class="grid input-grid">
+          <label class="field upload-field">
             <span>周报文件</span>
+            <small>支持 CSV、XLSX，保留原始表格用于核对。</small>
             <input type="file" name="csv_file" accept=".csv,.xlsx,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" required>
           </label>
           <label class="field">
@@ -41,6 +38,8 @@
           </label>
         </div>
 
+        </fieldset>
+        <fieldset class="form-section"><legend><span class="step-number">2</span>确认报告范围</legend>
         <div class="grid parameter-grid">
           <label class="field">
             <span>报告日期</span>
@@ -67,6 +66,8 @@
         </div>
         <div id="input-options-status" class="option-status" role="status" aria-live="polite"></div>
 
+        </fieldset>
+        <fieldset class="form-section"><legend><span class="step-number">3</span>选择内容整理方式</legend>
         <div class="grid">
           <label class="field">
             <span>内容处理</span>
@@ -76,7 +77,7 @@
               {% endfor %}
             </select>
           </label>
-          <label class="field">
+          <label class="field" id="model-field">
             <span>模型</span>
             <select name="model">
               {% for model in models %}
@@ -91,7 +92,9 @@
           <textarea name="custom_instruction" rows="3" placeholder="例如：按成果、问题和后续动作整理，不改变任何事实。"{% if selected_mode == 'custom' %} required{% endif %}>{{ form.get('custom_instruction', '') }}</textarea>
         </label>
 
-        <details>
+        <p class="mode-hint" id="mode-hint" role="status">原文模式只进行术语规范化与排版，无需调用模型。</p>
+        </fieldset>
+        <details class="advanced-settings">
           <summary>高级适配设置</summary>
           <div class="advanced-grid">
             <label class="field">
@@ -110,11 +113,27 @@
         </details>
 
         <div class="actions">
-          <button class="secondary" type="submit" formaction="{{ url_for('preview') }}">预览来源与内容</button>
-          <button type="submit" formaction="{{ url_for('generate') }}">生成并下载 DOCX</button>
+          <span class="action-hint">建议先审核，再下载正式文件。</span>
+          <button class="secondary" type="submit" formaction="{{ url_for('generate') }}">直接下载 DOCX</button>
+          <button type="submit" formaction="{{ url_for('preview') }}">预览来源与内容 <span aria-hidden="true">→</span></button>
         </div>
       </form>
     </section>
+
+    <aside class="creation-guide" aria-label="生成前提示">
+      <section class="guide-card"><span class="eyebrow">本次报告</span><h2>让内容先说清楚</h2><p>原文保留、润色或精简，都可在审核页逐块调整。</p><dl class="generation-summary"><div><dt>规则</dt><dd id="summary-preset">—</dd></div><div><dt>整理方式</dt><dd id="summary-mode">—</dd></div><div><dt>报告日期</dt><dd id="summary-date">—</dd></div></dl></section>
+      <section class="guide-card"><h2>先试一份示例</h2><p>初次使用可下载通用格式示例，选择“通用周报”体验完整流程。</p><div class="example-links"><a href="{{ url_for('download_example', filename='general-weekly.csv') }}">示例 CSV ↗</a><a href="{{ url_for('download_example', filename='general-weekly.xlsx') }}">示例 XLSX ↗</a></div></section>
+      <p class="guide-note">{% if llm_available %}模型服务已配置，可按需选择整理模式。{% else %}模型服务尚未配置，原文模式可正常使用。{% endif %}<br>审核会话保留 2 小时，请及时下载。</p>
+    </aside>
+    </div>
+    <section class="usage-stats" aria-label="匿名使用统计">
+      <article><strong>{{ usage_metrics.total_generations }}</strong><span>累计成功生成</span></article>
+      <article><strong>{{ usage_metrics.weekly_generations }}</strong><span>本周成功生成</span></article>
+      <article><strong>{{ usage_metrics.estimated_visitors }}</strong><span>独立访客（估算）</span></article>
+      <article><strong>{{ usage_metrics.page_views }}</strong><span>访问次数</span></article>
+    </section>
+    {% if not stats_available %}<p role="status">统计暂不可用，请检查服务端统计存储配置。</p>{% endif %}
+
 
     {% if prepared %}
     <section class="preview-stack" aria-label="输入预览">
@@ -192,11 +211,11 @@
     </section>
     {% endif %}
   </main>
-  <div id="processing-overlay" class="processing-overlay" role="status" aria-live="polite" aria-hidden="true">
+  <div id="processing-overlay" class="processing-overlay" role="dialog" aria-modal="true" aria-labelledby="processing-title" aria-hidden="true">
     <div class="processing-panel">
       <span class="spinner" aria-hidden="true"></span>
       <strong id="processing-title">正在处理周报</strong>
-      <p id="processing-message">请保持页面打开，完成后会自动显示结果。</p>
+      <p id="processing-message" role="status" aria-live="polite">请保持页面打开，完成后会自动显示结果。</p>
       <div id="stream-candidates" class="stream-candidates" hidden>
         <p>生成中的临时候选 · 尚未校验，不代表最终导出内容</p>
         <div data-stream-batches></div>
@@ -226,10 +245,24 @@
         const isCustom = contentMode.value === "custom";
         customInstructionField.hidden = !isCustom;
         customInstruction.required = isCustom;
+        const usesModel = contentMode.value !== "original";
+        document.getElementById("model-field").hidden = !usesModel;
+        form.elements.model.disabled = !usesModel;
+        document.getElementById("mode-hint").textContent = usesModel
+          ? "模型只整理表达。生成后请核对数字、结论与候选告警。"
+          : "原文模式只进行术语规范化与排版，无需调用模型。";
+        document.getElementById("summary-mode").textContent = contentMode.selectedOptions[0].textContent;
       };
       contentMode.addEventListener("change", updateCustomInstruction);
       updateCustomInstruction();
 
+      const updateSummary = () => {
+        document.getElementById("summary-preset").textContent = preset.selectedOptions[0].textContent;
+        document.getElementById("summary-date").textContent = form.elements.report_date.value || "未选择";
+      };
+      preset.addEventListener("change", updateSummary);
+      form.elements.report_date.addEventListener("change", updateSummary);
+      updateSummary();
       let optionsRequest;
       const replaceOptions = (select, values, emptyLabel, selectedValue = "") => {
         select.replaceChildren(new Option(emptyLabel, ""));
@@ -308,10 +341,15 @@
       preset.addEventListener("change", () => loadInputOptions(false));
       sheet.addEventListener("change", () => loadInputOptions(true));
 
+      let previousFocus;
       const setProcessing = (visible) => {
         overlay.classList.toggle("visible", visible);
         overlay.setAttribute("aria-hidden", visible ? "false" : "true");
+        document.getElementById("main-content").inert = visible;
+        document.querySelector(".site-header").inert = visible;
+        if (visible) { previousFocus = document.activeElement; document.getElementById("cancel-generation").focus(); }
         form.querySelectorAll("button").forEach((button) => { button.disabled = visible; });
+        if (!visible && previousFocus?.isConnected) previousFocus.focus();
       };
       const downloadResponse = async (response) => {
         const disposition = response.headers.get("Content-Disposition") || "";
@@ -335,6 +373,10 @@
       const streamBatches = streamCandidates.querySelector("[data-stream-batches]");
       const cancelGeneration = document.getElementById("cancel-generation");
       cancelGeneration.addEventListener("click", () => generationController?.abort());
+      overlay.addEventListener("keydown", (event) => {
+        if (event.key === "Escape") generationController?.abort();
+        if (event.key === "Tab") { event.preventDefault(); cancelGeneration.focus(); }
+      });
       form.addEventListener("submit", async (event) => {
         event.preventDefault();
         const target = event.submitter?.formAction || form.action;
@@ -401,6 +443,8 @@
         }
       });
       window.addEventListener("pageshow", () => setProcessing(false));
+      const formError = form.closest("section").querySelector(".alert");
+      if (formError) formError.focus();
     })();
   </script>
 </body>

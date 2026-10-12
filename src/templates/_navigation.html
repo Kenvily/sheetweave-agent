@@ -1,0 +1,13 @@
+{% macro navigation(active) %}
+<a class="skip-link" href="#main-content">跳转到主要内容</a>
+<header class="site-header">
+  <a class="brand" href="{{ url_for('index') }}" aria-label="docAgent 周报生成器首页">
+    <span class="brand-symbol" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M7 3h7l4 4v14H7z"/><path d="M14 3v5h4M10 12h5M10 16h5"/></svg></span>
+    <span><strong>docAgent</strong><small>周报工作台</small></span>
+  </a>
+  <nav aria-label="主导航">
+    <a href="{{ url_for('index') }}"{% if active == 'create' %} aria-current="page"{% endif %}>新建周报</a>
+    <a href="{{ url_for('help_page') }}"{% if active == 'help' %} aria-current="page"{% endif %}>使用帮助</a>
+  </nav>
+</header>
+{% endmacro %}

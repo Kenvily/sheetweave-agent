@@ -18,6 +18,7 @@
 | `tests/` | pytest 单元、集成、Web 和端到端回归，LLM 使用 Mock |
 | `data/周报.csv` | 原始两行表头参考输入，不修改 |
 | `data/研发三部周报模板.docx` | OOXML 模板与格式参考夹具，不修改 |
+| `docs/ui-design.md` | 当前界面分工、视觉规范、交互与浏览器验证范围 |
 | `docs/project-overview.md` | 当前项目结构、架构和原理介绍 |
 | `docs/wsl-lan-access.md` | WSL 局域网访问与 Windows 转发维护，Linux 原生部署无需照搬 |
 | `var/` | 持久化运行数据，整体排除 Git，保留并备份 |

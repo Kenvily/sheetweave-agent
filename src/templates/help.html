@@ -7,11 +7,14 @@
   <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
 </head>
 <body>
-  <main class="help-container">
+  {% from '_navigation.html' import navigation %}
+  {{ navigation('help') }}
+  <main id="main-content" class="help-container" tabindex="-1">
     <header class="help-header">
       <div>
         <a class="back-link" href="{{ url_for('index') }}">← 返回周报生成器</a>
-        <h1>使用帮助</h1>
+        <p class="eyebrow">快速上手</p><h1>使用帮助</h1>
+        <p class="page-description">从一份表格开始，完成可追溯的周报整理。</p>
       </div>
       <div class="help-downloads">
         <a class="button-link secondary" href="{{ url_for('download_example', filename='general-weekly.csv') }}">示例 CSV</a>
@@ -49,6 +52,7 @@
     <section class="card help-card help-faq">
       <h2>常见问题</h2>
       <details><summary>没有显示周次或工作表</summary><p>CSV 没有工作表；通用单周格式也没有周次选项。XLSX 请先选择文件，等待页面读取完成。</p></details>
+      <details><summary>生成过程中显示的候选可以直接导出吗？</summary><p>流式候选尚未校验。生成完成后，系统会校验并进入审核页；下载使用当前已采用、经过规范化的内容。</p></details>
       <details><summary>模型候选被回退</summary><p>候选涉及数字、指标、版本、日期或状态冲突时不会自动进入 DOCX。请对照来源后编辑，或勾选确认告警后谨慎采用；也可只重新生成该内容块。</p></details>
       <details><summary>PDF 预览不可用</summary><p>PDF 依赖服务器安装 LibreOffice。即使不可用，HTML 预览与 DOCX 下载仍可正常使用。</p></details>
       <details><summary>刷新后找不到报告</summary><p>审核会话默认仅保留两小时。过期后需重新上传，系统不保存历史周报正文。</p></details>
