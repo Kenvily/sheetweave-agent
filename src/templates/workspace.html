@@ -166,7 +166,7 @@
             {% if block.llm_editable %}
             <details class="regenerator">
               <summary>单条重新生成</summary>
-              <form method="post" action="{{ url_for('regenerate_workspace_block', token=session.token, block_id=block.block_id) }}">
+              <form class="queued-workspace-form" data-task-url="{{ url_for('submit_regeneration_task', token=session.token, block_id=block.block_id) }}" method="post" action="{{ url_for('regenerate_workspace_block', token=session.token, block_id=block.block_id) }}">
                 <input type="hidden" name="revision" value="{{ session.revision }}">
                 <label class="field compact"><span>处理模式</span><select name="content_mode" data-regenerate-mode>{% for value, label in content_modes %}<option value="{{ value }}"{% if session.content_mode == value %} selected{% endif %}>{{ label }}</option>{% endfor %}</select></label>
                 <label class="field compact"><span>模型</span><select name="model">{% for model in models %}<option value="{{ model }}"{% if session.model == model %} selected{% endif %}>{{ model }}</option>{% endfor %}</select></label>
@@ -190,7 +190,7 @@
             {% if session.pdf_path %}
             <button class="preview-tab active" type="button" role="tab" id="preview-tab-pdf" aria-controls="preview-panel-pdf" tabindex="0" aria-selected="true" data-preview-mode="pdf">PDF</button>
             {% elif pdf_available %}
-            <form class="pdf-preview-form" method="post" action="{{ url_for('generate_workspace_pdf', token=session.token) }}">
+            <form class="pdf-preview-form" data-task-url="{{ url_for('submit_pdf_task', token=session.token) }}" method="post" action="{{ url_for('generate_workspace_pdf', token=session.token) }}">
               <input type="hidden" name="revision" value="{{ session.revision }}">
               <button class="preview-tab" type="submit" title="生成当前版本的 PDF 预览">PDF</button>
             </form>
@@ -245,8 +245,9 @@
   </dialog>
 
   <div id="processing-overlay" class="processing-overlay" role="status" aria-live="polite" aria-hidden="true">
-    <div class="processing-panel"><span class="spinner" aria-hidden="true"></span><strong>正在更新当前周报</strong><p>保存后会生成新的文档版本，请稍候。</p></div>
+    <div class="processing-panel"><span class="spinner" aria-hidden="true"></span><strong>正在更新当前周报</strong><p>保存后会生成新的文档版本，请稍候。</p><button type="button" class="secondary" id="cancel-workspace-task" hidden>取消任务</button></div>
   </div>
+  <script src="{{ url_for('static', filename='task-client.js') }}"></script>
   <script src="{{ url_for('static', filename='workspace.js') }}"></script>
   <script>
     (() => {
@@ -362,13 +363,35 @@
         if (event.defaultPrevented) return;
         showProcessing("正在更新当前周报", "正在生成新的文档版本，请稍候。");
       }));
-      document.querySelectorAll(".pdf-preview-form").forEach((form) => form.addEventListener("submit", () => {
-        const button = form.querySelector("button");
-        button.textContent = "PDF 生成中…";
-        button.setAttribute("aria-busy", "true");
-        button.disabled = true;
-      }));
+      let taskController;
+      const cancelTask = document.getElementById("cancel-workspace-task");
+      cancelTask.addEventListener("click", () => taskController?.abort());
+      const runWorkspaceTask = async (form, resume = false) => {
+        taskController = new AbortController();
+        showProcessing("后台任务处理中", "正在提交任务。");
+        cancelTask.hidden = false;
+        const button = form?.querySelector("button[type=submit]");
+        if (button) button.disabled = true;
+        try {
+          await window.runQueuedReport({form, url: form?.dataset.taskUrl, resume,
+            signal: taskController.signal,
+            onProgress: text => { processingMessage.textContent = text; },
+            onComplete: result => window.location.assign(result.url),
+          });
+        } catch (error) {
+          if (error.name !== "AbortError") window.alert(error.message);
+        } finally {
+          if (button) button.disabled = false;
+          cancelTask.hidden = true; taskController = null;
+          overlay.classList.remove("visible"); overlay.setAttribute("aria-hidden", "true");
+        }
+      };
+      document.querySelectorAll(".queued-workspace-form, .pdf-preview-form").forEach(form => {
+        form.addEventListener("submit", event => { event.preventDefault(); runWorkspaceTask(form); });
+      });
+      if (window.pendingReportTask()) runWorkspaceTask(null, true);
       window.addEventListener("pageshow", () => {
+        if (taskController) return;
         overlay.classList.remove("visible");
         overlay.setAttribute("aria-hidden", "true");
       });
