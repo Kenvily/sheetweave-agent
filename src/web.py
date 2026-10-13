@@ -8,6 +8,7 @@ import io
 import os
 import re
 import secrets
+import shutil
 import sqlite3
 import tempfile
 import zipfile
@@ -33,6 +34,7 @@ from werkzeug.datastructures import FileStorage
 from werkzeug.exceptions import RequestEntityTooLarge
 
 from .docx_security import inspect_docx_package
+from .generation import generate_snapshot
 from .input_parser import inspect_input_options
 from .llm import (
     MODE_LABELS,
@@ -52,12 +54,11 @@ from .rules import RulePreset, list_rule_presets, load_rule_preset
 from .service import (
     edit_report_block,
     generate_report,
-    prepare_report,
-    process_report,
     render_prepared_report,
     select_block_version,
 )
 from .stats import UsageMetrics, UsageStats
+from .task_queue import QueueFullError, TaskQueue
 from .web_sessions import ReportSession, SessionConflictError, SnapshotStore
 from .web_stream import GenerationCancelled, stream_events
 
@@ -196,6 +197,7 @@ def create_app(
     snapshot_store: SnapshotStore | None = None,
     pdf_preview_service: PdfPreviewService | None = None,
     usage_stats: UsageStats | None = None,
+    task_queue: TaskQueue | None = None,
 ) -> Flask:
     """Create and configure the weekly report web application."""
     app = Flask(__name__)
@@ -222,6 +224,7 @@ def create_app(
         SNAPSHOT_STORE=snapshot_store or SnapshotStore(snapshot_root),
         PDF_PREVIEW_SERVICE=pdf_preview_service or PdfPreviewService.from_environment(),
         USAGE_STATS=configured_stats,
+        TASK_QUEUE=task_queue or TaskQueue.from_environment(),
     )
 
     def safe_metrics() -> UsageMetrics:
@@ -504,75 +507,156 @@ def create_app(
         """Return stale or directly opened preview URLs to the upload form."""
         return redirect(url_for("index"))
 
+    def generation_options(upload):
+        preset = load_rule_preset(request.form.get("preset", "rd3"))
+        mode, instruction, model = process_options()
+        return {
+            "preset": preset.id,
+            "report_date": _parse_date(request.form.get("report_date", "")).isoformat(),
+            "section_number": _parse_section_number(request.form.get("section_number", ""), preset),
+            "content_mode": mode.value,
+            "custom_instruction": instruction,
+            "model": model,
+            "week": request.form.get("week", "").strip() or None,
+            "sheet": request.form.get("sheet", "").strip() or None,
+            "field_mapping": _field_mapping(),
+            "filename": upload.filename,
+        }
+
     def build_preview(
         on_delta=None, progress=lambda _message: None, input_path=None, template_path=None
     ):
-        """Generate one fully checked snapshot for either HTML or SSE delivery."""
+        """Compatibility synchronous preview; the homepage uses queued tasks."""
         upload = _data_upload()
         if upload is None:
             raise ValueError("请选择周报 CSV 或 XLSX 文件。")
-        progress("正在解析表格与规则。")
-        preset = load_rule_preset(request.form.get("preset", "rd3"))
-        report_date = _parse_date(request.form.get("report_date", ""))
-        section_number = _parse_section_number(request.form.get("section_number", ""), preset)
-        mode, instruction, model = process_options()
+        options = generation_options(upload)
         with tempfile.TemporaryDirectory(prefix="weekly-report-preview-") as directory:
             workdir = Path(directory)
-            source_path = input_path or save_input(upload, workdir)
-            prepared, preset = prepare_report(
-                source_path,
-                preset_id=preset.id,
-                requested_week=request.form.get("week", "").strip() or None,
-                sheet=request.form.get("sheet", "").strip() or None,
-                field_mapping=_field_mapping(),
-                display_filename=upload.filename,
-            )
-            progress(
-                "正在规范化原文。"
-                if mode is ContentMode.ORIGINAL
-                else "正在生成候选内容，流式内容尚未校验。"
-            )
-            prepared = process_report(
-                prepared,
-                mode,
-                custom_instruction=instruction,
-                model=model,
+            token = generate_snapshot(
+                input_path or save_input(upload, workdir),
+                template_path or selected_template(workdir),
+                options,
+                app.config["SNAPSHOT_STORE"],
                 llm_service=app.config.get("LLM_SERVICE"),
                 on_delta=on_delta,
+                progress=progress,
             )
-            progress("候选已完成校验，正在生成并验证 DOCX。")
-            output_path = workdir / "report.docx"
-            template = template_path or selected_template(workdir)
-            render_prepared_report(
-                prepared,
-                preset,
-                template,
-                output_path,
-                report_date,
-                section_number,
-            )
-            progress("DOCX 验证通过，正在保存审核快照。")
-            filename = f"{preset.name}-{report_date:%Y%m%d}.docx"
-            snapshot_token = app.config["SNAPSHOT_STORE"].create_session(
-                prepared,
-                preset_id=preset.id,
-                report_date=report_date,
-                section_number=section_number,
-                content_mode=mode.value,
-                custom_instruction=instruction,
-                model=model,
-                template_content=template.read_bytes(),
-                report_content=output_path.read_bytes(),
-                download_name=filename,
-            )
-        submitted_task_id = request.form.get("generation_task_id", "").strip()
-        preview_task_id = (
-            submitted_task_id
-            if ANONYMOUS_ID_PATTERN.fullmatch(submitted_task_id)
-            else snapshot_token
+        submitted = request.form.get("generation_task_id", "").strip()
+        safe_record_generation(
+            f"preview:{submitted if ANONYMOUS_ID_PATTERN.fullmatch(submitted) else token}"
         )
-        safe_record_generation(f"preview:{preview_task_id}")
-        return snapshot_token
+        return token
+
+    def task_submission(kind, payload, token, directory):
+        try:
+            app.config["TASK_QUEUE"].enqueue(token, kind, payload)
+        except Exception:
+            shutil.rmtree(directory, ignore_errors=True)
+            raise
+        return jsonify(
+            id=token,
+            status_url=url_for("task_status", token=token),
+            cancel_url=url_for("cancel_task", token=token),
+        ), 202
+
+    @app.post("/tasks")
+    def submit_generation_task():
+        """Persist uploads and enqueue work; never call the model in a Web thread."""
+        directory = None
+        try:
+            upload = _data_upload()
+            if upload is None:
+                raise ValueError("请选择周报 CSV 或 XLSX 文件。")
+            options = generation_options(upload)
+            if options["content_mode"] != "original":
+                service = app.config.get("LLM_SERVICE") or LLMService(load_llm_config())
+                service.config.select_model(options["model"]).require_available()
+                if options["content_mode"] == "custom" and not options["custom_instruction"]:
+                    raise ValueError("自定义要求模式必须填写处理要求。")
+            queue = app.config["TASK_QUEUE"]
+            token, directory = queue.new_directory()
+            source = save_input(upload, directory)
+            source.chmod(0o600)
+            template = selected_template(directory)
+            destination = directory / "template.docx"
+            if template != destination:
+                shutil.copyfile(template, destination)
+            destination.chmod(0o600)
+            options["input_name"] = source.name
+            return task_submission("generate", options, token, directory)
+        except (OSError, ValueError, LLMClientError, zipfile.BadZipFile) as exc:
+            if directory:
+                shutil.rmtree(directory, ignore_errors=True)
+            return jsonify(error=str(exc)), 429 if isinstance(exc, QueueFullError) else 400
+
+    @app.post("/workspace/<token>/blocks/<block_id>/tasks")
+    def submit_regeneration_task(token, block_id):
+        try:
+            session = current_session(token)
+            mode, instruction, model = process_options()
+            if mode is ContentMode.ORIGINAL:
+                raise ValueError("单条重新生成必须选择模型处理模式。")
+            _require_external_consent(mode)
+            if not any(
+                block.block_id == block_id and block.llm_editable
+                for block in session.prepared.blocks
+            ):
+                raise ValueError("内容块不存在或不支持模型处理。")
+            payload = {
+                "token": token,
+                "revision": session.revision,
+                "block_id": block_id,
+                "content_mode": mode.value,
+                "custom_instruction": instruction,
+                "model": model or session.model,
+                "overwrite_edited": request.form.get("overwrite_edited") == "yes",
+            }
+            task, directory = app.config["TASK_QUEUE"].new_directory()
+            return task_submission("regenerate", payload, task, directory)
+        except (ValueError, OSError) as exc:
+            return jsonify(error=str(exc)), 429 if isinstance(
+                exc, QueueFullError
+            ) else 409 if isinstance(exc, SessionConflictError) else 400
+
+    @app.post("/workspace/<token>/pdf/tasks")
+    def submit_pdf_task(token):
+        try:
+            session = current_session(token)
+            if not app.config["PDF_PREVIEW_SERVICE"].available:
+                raise ValueError("当前环境未安装 LibreOffice，PDF 版式预览不可用。")
+            task, directory = app.config["TASK_QUEUE"].new_directory()
+            return task_submission(
+                "pdf", {"token": token, "revision": session.revision}, task, directory
+            )
+        except (ValueError, OSError) as exc:
+            return jsonify(error=str(exc)), 429 if isinstance(
+                exc, QueueFullError
+            ) else 409 if isinstance(exc, SessionConflictError) else 400
+
+    @app.get("/tasks/<token>")
+    def task_status(token):
+        try:
+            result = app.config["TASK_QUEUE"].status(token, int(request.args.get("after", "0")))
+            if result["result"]:
+                outcome = result["result"]
+                outcome["url"] = url_for(
+                    "workspace", token=outcome["token"], updated=outcome.get("updated")
+                )
+                if outcome.get("block_id"):
+                    outcome["url"] += f"#block-{outcome['block_id']}"
+                outcome["download_url"] = url_for("download_snapshot", token=outcome["token"])
+            return jsonify(result), 200, {"Cache-Control": "no-store"}
+        except ValueError as exc:
+            return jsonify(error=str(exc)), 404
+
+    @app.post("/tasks/<token>/cancel")
+    def cancel_task(token):
+        try:
+            cancelled = app.config["TASK_QUEUE"].cancel(token)
+            return jsonify(cancelled=cancelled), 200 if cancelled else 409
+        except ValueError as exc:
+            return jsonify(error=str(exc)), 404
 
     @app.post("/preview")
     def preview():

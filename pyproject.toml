@@ -13,6 +13,7 @@ dependencies = ["Flask==3.1.3", "gunicorn==26.2.0", "openpyxl==3.1.5"]
 [project.scripts]
 weekly-report-agent = "weekly_report_agent.cli:main"
 weekly-report-web = "weekly_report_agent.web:main"
+weekly-report-worker = "weekly_report_agent.task_worker:main"
 
 [tool.setuptools]
 packages = ["weekly_report_agent", "weekly_report_agent.llm", "weekly_report_agent.rules"]

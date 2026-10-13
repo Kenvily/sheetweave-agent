@@ -52,9 +52,10 @@
     <section class="card help-card help-faq">
       <h2>常见问题</h2>
       <details><summary>没有显示周次或工作表</summary><p>CSV 没有工作表；通用单周格式也没有周次选项。XLSX 请先选择文件，等待页面读取完成。</p></details>
-      <details><summary>生成过程中显示的候选可以直接导出吗？</summary><p>流式候选尚未校验。生成完成后，系统会校验并进入审核页；下载使用当前已采用、经过规范化的内容。</p></details>
+      <details><summary>生成过程中显示的候选可以直接导出吗？</summary><p>增量显示的模型候选尚未校验。生成完成后，系统会校验并进入审核页；下载使用当前已采用、经过规范化的内容。</p></details>
       <details><summary>模型候选被回退</summary><p>候选涉及数字、指标、版本、日期或状态冲突时不会自动进入 DOCX。请对照来源后编辑，或勾选确认告警后谨慎采用；也可只重新生成该内容块。</p></details>
       <details><summary>PDF 预览不可用</summary><p>PDF 依赖服务器安装 LibreOffice。即使不可用，HTML 预览与 DOCX 下载仍可正常使用。</p></details>
+      <details><summary>任务一直显示排队</summary><p>任务由独立后台进程处理。请确认服务器已启动后台 Worker；多人同时生成时也可能等待可用处理容量。刷新当前页面会重新连接任务。</p></details>
       <details><summary>刷新后找不到报告</summary><p>审核会话默认仅保留两小时。过期后需重新上传，系统不保存历史周报正文。</p></details>
     </section>
     <p class="help-privacy">页面只显示聚合统计：累计 {{ usage_metrics.total_generations }} 次、本周 {{ usage_metrics.weekly_generations }} 次、独立访客估算 {{ usage_metrics.estimated_visitors }}、访问次数 {{ usage_metrics.page_views }}。统计不保存周报正文、姓名、账号或 IP。</p>
