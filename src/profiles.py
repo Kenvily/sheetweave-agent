@@ -151,6 +151,30 @@ class ProfileStore:
                     (time.time(), profile_id),
                 )
 
+    def rename(self, profile_id: str, name: str, *, expected_version: int | None = None) -> int:
+        """Publish a name-only version, preserving history, configuration and use statistics."""
+        if not isinstance(name, str) or not name.strip() or len(name.strip()) > 100:
+            raise ValueError("方案名称须为 1～100 个字符。")
+        name = name.strip()
+        if any(ord(character) < 32 or ord(character) == 127 for character in name):
+            raise ValueError("方案名称不能包含换行或控制字符。")
+        preset, template, metadata = self.load(profile_id)
+        if expected_version is not None and metadata["version"] != expected_version:
+            raise ValueError("方案已更新，请重新载入后重命名。")
+        if name == preset.name:
+            return metadata["version"]
+        rule = preset_payload(preset)
+        rule["name"] = name
+        _, version = self.save(
+            rule,
+            template,
+            description=metadata.get("description", ""),
+            evidence=metadata.get("evidence", {}),
+            profile_id=profile_id,
+            expected_version=metadata["version"],
+        )
+        return version
+
     def delete(self, profile_id: str, queue) -> None:
         """Reject deletion of built-ins or profiles referenced by active queued work."""
         with self.locked():

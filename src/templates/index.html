@@ -19,6 +19,7 @@
     <section class="card configuration-card" aria-label="周报生成配置">
       <div class="section-head"><div><h2>新建周报</h2><p class="section-description">完成以下配置，再进入审核工作区。</p></div><span class="badge">第一步</span></div>
       {% if error %}<div class="alert" role="alert" tabindex="-1">{{ error }}</div>{% endif %}
+      {% if not presets %}<p class="alert">尚未创建方案。请先<a href="{{ url_for('profiles.library') }}">新建并保存方案</a>，再上传周报生成。</p>{% endif %}
       <form data-task-url="{{ url_for('submit_generation_task') }}" id="report-form" action="{{ url_for('generate') }}" method="post" enctype="multipart/form-data">
         <input type="hidden" name="generation_task_id" value="{{ generation_task_id }}">
         <fieldset class="form-section"><legend><span class="step-number">1</span>选择数据来源</legend>
@@ -29,10 +30,11 @@
             <input type="file" name="csv_file" accept=".csv,.xlsx,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" required>
           </label>
           <label class="field">
-            <span>周报规则 / 已保存方案</span>
-            <select name="preset" required>
+            <span>已保存方案</span>
+            <select name="preset" required{% if not presets %} disabled{% endif %}>
+              {% if not presets %}<option value="">暂无方案，请先新建方案</option>{% endif %}
               {% for preset in presets %}
-              <option value="{{ preset.id }}"{% if form.get('preset', 'rd3') == preset.id %} selected{% endif %}>{{ preset.name }}</option>
+              <option data-section-default="{{ preset.document.heading_start_default }}" value="{{ preset.id }}"{% if form.get('preset', '') == preset.id %} selected{% endif %}>{{ preset.name }}</option>
               {% endfor %}
             </select>
             <small>需要调整字段映射或文档模板？前往<a href="{{ url_for('profiles.library') }}">方案适配</a>，试生成并保存后在此选用。</small>
@@ -97,8 +99,8 @@
         </fieldset>
         <div class="actions">
           <span class="action-hint">建议先审核，再下载正式文件。</span>
-          <button class="secondary" type="submit" formaction="{{ url_for('generate') }}">直接下载 DOCX</button>
-          <button type="submit" formaction="{{ url_for('preview') }}">预览来源与内容 <span aria-hidden="true">→</span></button>
+          <button class="secondary" type="submit"{% if not presets %} disabled{% endif %} formaction="{{ url_for('generate') }}">直接下载 DOCX</button>
+          <button type="submit"{% if not presets %} disabled{% endif %} formaction="{{ url_for('preview') }}">预览来源与内容 <span aria-hidden="true">→</span></button>
         </div>
       </form>
     </section>
@@ -265,7 +267,7 @@
         const file = sourceFile.files[0];
         const presetOption = preset.options[preset.selectedIndex];
         updateSectionDefault(presetOption.dataset.sectionDefault || "-");
-        if (!file) {
+        if (!file || !preset.value) {
           replaceOptions(week, [], "选择文件后加载周次");
           replaceOptions(sheet, [], "选择 XLSX 后加载工作表");
           optionsStatus.textContent = "";
@@ -337,7 +339,7 @@
         document.getElementById("main-content").inert = visible;
         document.querySelector(".site-header").inert = visible;
         if (visible) { previousFocus = document.activeElement; document.getElementById("cancel-generation").focus(); }
-        form.querySelectorAll("button").forEach((button) => { button.disabled = visible; });
+        form.querySelectorAll("button").forEach((button) => { button.disabled = visible || !preset.value; });
         if (!visible && previousFocus?.isConnected) previousFocus.focus();
       };
       const downloadResponse = async (response) => {

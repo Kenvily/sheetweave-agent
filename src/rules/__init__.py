@@ -330,7 +330,7 @@ def validate_rule_preset(payload: dict[str, Any]) -> RulePreset:
     )
 
 
-def load_rule_preset(preset_id: str = "rd3", rules_dir: Path | None = None) -> RulePreset:
+def load_rule_preset(preset_id: str, rules_dir: Path | None = None) -> RulePreset:
     """Load and validate a named preset from a controlled directory."""
     if not PRESET_ID_PATTERN.fullmatch(preset_id):
         raise RulePresetError("规则 id 格式无效。")

@@ -20,22 +20,13 @@ def _iso_date(value: str) -> date:
 
 def build_parser() -> argparse.ArgumentParser:
     """Build the command-line argument parser."""
-    parser = argparse.ArgumentParser(description="生成研发周报 DOCX。")
+    parser = argparse.ArgumentParser(description="使用已保存方案生成周报 DOCX。")
     parser.add_argument(
         "--input", type=Path, default=Path("data/周报-v1.csv"), help="输入 CSV/XLSX"
     )
-    parser.add_argument(
-        "--template",
-        type=Path,
-        default=Path("data/研发三部周报模板-v2.docx"),
-        help="DOCX 模板",
-    )
-    parser.add_argument(
-        "--output", type=Path, default=Path("outputs/研发三部周报.docx"), help="输出 DOCX"
-    )
+    parser.add_argument("--output", type=Path, default=Path("outputs/周报.docx"), help="输出 DOCX")
     parser.add_argument("--week", help="周次，例如“第1周”或“2026年9月第1周”")
-    parser.add_argument("--preset", choices=("rd3", "general"), default="rd3", help="周报规则预设")
-    parser.add_argument("--profile", help="已保存方案 ID；使用方案的模板和规则")
+    parser.add_argument("--profile", required=True, help="已保存方案 ID；先在方案适配中创建并保存")
     parser.add_argument("--sheet", help="XLSX 工作表名称，默认使用第一个工作表")
     parser.add_argument("--report-date", type=_iso_date, default=date.today(), help="报告日期")
     parser.add_argument(
@@ -67,57 +58,37 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         if args.content_mode != ContentMode.ORIGINAL.value and not args.allow_external:
             parser.error("非原文模式必须使用 --allow-external 确认允许发送内容块。")
-        preset, template = None, args.template
-        if args.profile:
-            from .profiles import ProfileStore
-            from .rules import preset_payload, validate_rule_preset
+        from .profiles import ProfileStore
+        from .rules import preset_payload, validate_rule_preset
 
-            store = ProfileStore.from_environment()
-            # Freeze locally while holding the same lock as administrator deletion.
-            import shutil
-            import tempfile
+        store = ProfileStore.from_environment()
+        # Freeze locally while holding the same lock as administrator deletion.
+        import shutil
+        import tempfile
 
-            with tempfile.TemporaryDirectory(prefix="weekly-profile-cli-") as temp:
-                with store.locked():
-                    preset, saved_template, _ = store.load(args.profile)
-                    template = Path(temp) / "template.docx"
-                    shutil.copyfile(saved_template, template)
-                    frozen = validate_rule_preset(preset_payload(preset))
-                    store.used(args.profile)
-                plan = generate_report(
-                    args.input,
-                    template,
-                    args.output,
-                    args.report_date,
-                    args.week,
-                    args.section_number,
-                    preset=frozen,
-                    sheet=args.sheet,
-                    content_mode=args.content_mode,
-                    custom_instruction=args.custom_instruction,
-                    model=args.model,
-                )
-                store.used(args.profile, successful=True)
-            print(f"已生成：{args.output.resolve()}，有效事项：{plan.item_count}")
-            return 0
-        plan = generate_report(
-            input_path=args.input,
-            template_path=args.template,
-            output_path=args.output,
-            report_date=args.report_date,
-            requested_week=args.week,
-            section_number=args.section_number,
-            preset_id=args.preset,
-            sheet=args.sheet,
-            content_mode=args.content_mode,
-            custom_instruction=args.custom_instruction,
-            model=args.model,
-        )
+        with tempfile.TemporaryDirectory(prefix="weekly-profile-cli-") as temp:
+            with store.locked():
+                preset, saved_template, _ = store.load(args.profile)
+                template = Path(temp) / "template.docx"
+                shutil.copyfile(saved_template, template)
+                frozen = validate_rule_preset(preset_payload(preset))
+                store.used(args.profile)
+            plan = generate_report(
+                args.input,
+                template,
+                args.output,
+                args.report_date,
+                args.week,
+                args.section_number,
+                preset=frozen,
+                sheet=args.sheet,
+                content_mode=args.content_mode,
+                custom_instruction=args.custom_instruction,
+                model=args.model,
+            )
+            store.used(args.profile, successful=True)
+        print(f"已生成：{args.output.resolve()}，有效事项：{plan.item_count}")
+        return 0
     except (FileNotFoundError, OSError, ValueError, RuntimeError) as exc:
         parser.error(str(exc))
-    print(f"已生成：{args.output.resolve()}")
-    print(
-        f"数据范围：{plan.source_label}，起始章节：{plan.section_number}，"
-        f"有效事项：{plan.item_count}"
-    )
     return 0

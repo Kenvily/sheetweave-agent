@@ -13,6 +13,8 @@ from weekly_report_agent.rules import RulePresetError, load_rule_preset, validat
 from weekly_report_agent.service import generate_report, prepare_report, process_report
 from weekly_report_agent.web import create_app
 
+pytestmark = pytest.mark.usefixtures("saved_generation_profiles")
+
 ROOT = Path(__file__).resolve().parents[1]
 TEMPLATE = ROOT / "data/研发三部周报模板-v2.docx"
 
@@ -101,7 +103,11 @@ def test_completed_status_with_prior_week_is_marked_completed(tmp_path: Path, st
         "项目甲,事项B,进行中,历史工作,继续处理,本周有效内容",
     )
 
-    prepared, _preset = prepare_report(source, requested_week="第3周")
+    prepared, _preset = prepare_report(
+        source,
+        preset=load_rule_preset("rd3", ROOT / "tests/fixtures/rules"),
+        requested_week="第3周",
+    )
 
     completed, active = prepared.source.sources
     assert completed.historical_completed is True
@@ -119,7 +125,9 @@ def test_status_is_only_completion_signal(tmp_path: Path) -> None:
         "项目甲,事项A,进行中,项目已完成,任务已结项,本周继续验证",
     )
 
-    parsed = parse_input(source, load_rule_preset("rd3"), requested_week="第3周")
+    parsed = parse_input(
+        source, load_rule_preset("rd3", ROOT / "tests/fixtures/rules"), requested_week="第3周"
+    )
 
     assert parsed.sources[0].historical_completed is False
     assert parsed.sources[0].original_text == "本周继续验证"
@@ -127,12 +135,16 @@ def test_status_is_only_completion_signal(tmp_path: Path) -> None:
 
 def test_first_week_and_rows_without_prior_content_keep_current_text(tmp_path: Path) -> None:
     first_week = _write_matrix(tmp_path, "项目甲,事项A,完成,首周成果,,")
-    parsed = parse_input(first_week, load_rule_preset("rd3"), requested_week="第1周")
+    parsed = parse_input(
+        first_week, load_rule_preset("rd3", ROOT / "tests/fixtures/rules"), requested_week="第1周"
+    )
     assert parsed.sources[0].historical_completed is False
     assert parsed.sources[0].original_text == "首周成果"
 
     no_prior = _write_matrix(tmp_path, "项目甲,事项A,完成,,本周首次完成,")
-    parsed = parse_input(no_prior, load_rule_preset("rd3"), requested_week="第2周")
+    parsed = parse_input(
+        no_prior, load_rule_preset("rd3", ROOT / "tests/fixtures/rules"), requested_week="第2周"
+    )
     assert parsed.sources[0].historical_completed is False
     assert parsed.sources[0].original_text == "本周首次完成"
 
@@ -140,7 +152,9 @@ def test_first_week_and_rows_without_prior_content_keep_current_text(tmp_path: P
 def test_completed_row_with_empty_current_week_is_still_included(tmp_path: Path) -> None:
     source = _write_matrix(tmp_path, "项目甲,事项A,完成,历史成果,,")
 
-    parsed = parse_input(source, load_rule_preset("rd3"), requested_week="第3周")
+    parsed = parse_input(
+        source, load_rule_preset("rd3", ROOT / "tests/fixtures/rules"), requested_week="第3周"
+    )
 
     assert len(parsed.sources) == 1
     assert parsed.sources[0].historical_completed is True
@@ -178,7 +192,11 @@ def test_historical_completed_block_is_not_sent_to_llm(tmp_path: Path) -> None:
         "项目甲,旧事项,完成,历史成果,历史补录,不应发送的旧内容",
         "项目乙,当前事项,进行中,前期调研,持续开发,允许发送文本",
     )
-    prepared, _preset = prepare_report(source, requested_week="第3周")
+    prepared, _preset = prepare_report(
+        source,
+        preset=load_rule_preset("rd3", ROOT / "tests/fixtures/rules"),
+        requested_week="第3周",
+    )
     client = EchoClient()
 
     result = process_report(prepared, ContentMode.POLISH, llm_service=_llm_service(client))
@@ -200,7 +218,14 @@ def test_docx_keeps_item_but_replaces_old_content_with_completed(tmp_path: Path)
     )
     output = tmp_path / "report.docx"
 
-    generate_report(source, TEMPLATE, output, date(2026, 10, 10), requested_week="第3周")
+    generate_report(
+        source,
+        TEMPLATE,
+        output,
+        date(2026, 10, 10),
+        preset=load_rule_preset("rd3", ROOT / "tests/fixtures/rules"),
+        requested_week="第3周",
+    )
 
     with zipfile.ZipFile(output) as package:
         document = package.read("word/document.xml").decode("utf-8")
@@ -225,7 +250,7 @@ def test_web_preview_marks_status_rule_result() -> None:
                 ),
                 "weekly.csv",
             ),
-            "preset": "rd3",
+            "preset": "p_rd3",
             "week": "第3周",
             "report_date": "2026-10-10",
             "content_mode": "original",

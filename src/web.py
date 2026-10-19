@@ -34,7 +34,6 @@ from flask import (
 from werkzeug.datastructures import FileStorage
 from werkzeug.exceptions import RequestEntityTooLarge
 
-from .docx_security import inspect_docx_package
 from .generation import generate_snapshot
 from .input_parser import inspect_input_options
 from .llm import (
@@ -53,7 +52,7 @@ from .numbering import renumber
 from .pdf_preview import PdfPreviewError, PdfPreviewService
 from .planner import build_directory_plan, prepared_body_paragraphs, validate_section_number
 from .profiles import ProfileStore
-from .rules import RulePreset, list_rule_presets, load_rule_preset, preset_payload
+from .rules import RulePreset, preset_payload
 from .service import (
     edit_report_block,
     generate_report,
@@ -69,7 +68,6 @@ from .web_stream import GenerationCancelled, stream_events
 DEFAULT_TEMPLATE = Path("data/研发三部周报模板-v2.docx")
 DOCX_MIME_TYPE = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
 MAX_UPLOAD_SIZE = 16 * 1024 * 1024
-DEFAULT_SECTION_NUMBER = 9
 SUPPORTED_INPUT_SUFFIXES = {".csv", ".xlsx"}
 FIELD_KEYS = ("project", "detail", "status", "content", "issues", "next_plan")
 VISITOR_COOKIE_NAME = "weekly_report_visitor"
@@ -239,10 +237,7 @@ def create_app(
     def available_presets():
         store = app.config["PROFILE_STORE"]
         with store.locked():
-            return (
-                *(preset for preset in list_rule_presets() if preset.id != "general"),
-                *(store.load(item["id"])[0] for item in store.list()),
-            )
+            return (*(store.load(item["id"])[0] for item in store.list()),)
 
     def selected_preset(preset_id):
         if preset_id.startswith("p_"):
@@ -254,7 +249,7 @@ def create_app(
                 preset, template, metadata = store.load(preset_id)
                 g.report_profile = (preset, template.read_bytes(), metadata["version"])
             return preset
-        return load_rule_preset(preset_id)
+        raise ValueError("请先新建并保存方案，再选择已保存方案生成周报。")
 
     def safe_metrics() -> UsageMetrics:
         service = app.config.get("USAGE_STATS")
@@ -348,7 +343,6 @@ def create_app(
                 error=error,
                 today=date.today().isoformat(),
                 form=request.form if request.method == "POST" else request.args,
-                default_section_number=DEFAULT_SECTION_NUMBER,
                 presets=available_presets(),
                 prepared=prepared,
                 selected_preset=selected_preset,
@@ -497,7 +491,7 @@ def create_app(
         return input_path
 
     def selected_template(workdir: Path) -> Path:
-        selected_id = request.form.get("preset", "rd3")
+        selected_id = request.form.get("preset", "")
         if selected_id.startswith("p_"):
             if request.files.get("template_file") and request.files["template_file"].filename:
                 raise ValueError("已保存方案的模板不可临时替换，请到方案适配保存新版本。")
@@ -506,14 +500,7 @@ def create_app(
             path.write_bytes(g.report_profile[1])
             path.chmod(0o600)
             return path
-        template_upload = request.files.get("template_file")
-        if template_upload is None or not template_upload.filename:
-            return Path(app.config["REPORT_TEMPLATE_PATH"])
-        _require_extension(template_upload.filename, {".docx"}, "报告模板")
-        path = workdir / "template.docx"
-        template_upload.save(path)
-        inspect_docx_package(path)
-        return path
+        raise ValueError("请选择已保存方案，模板和规则统一在方案适配中设置。")
 
     def process_options() -> tuple[ContentMode, str | None, str | None]:
         mode = _selected_mode()
@@ -543,7 +530,7 @@ def create_app(
         try:
             if upload is None:
                 raise ValueError("请选择周报 CSV 或 XLSX 文件。")
-            preset = selected_preset(request.form.get("preset", "rd3"))
+            preset = selected_preset(request.form.get("preset", ""))
             with tempfile.TemporaryDirectory(prefix="weekly-report-options-") as directory:
                 input_path = save_input(upload, Path(directory))
                 options = inspect_input_options(
@@ -567,7 +554,7 @@ def create_app(
         return redirect(url_for("index"))
 
     def generation_options(upload):
-        preset = selected_preset(request.form.get("preset", "rd3"))
+        preset = selected_preset(request.form.get("preset", ""))
         mode, instruction, model = process_options()
         return {
             "preset": preset.id,
@@ -982,7 +969,7 @@ def create_app(
         try:
             if upload is None:
                 raise ValueError("请选择周报 CSV 或 XLSX 文件。")
-            preset = selected_preset(request.form.get("preset", "rd3"))
+            preset = selected_preset(request.form.get("preset", ""))
             report_date = _parse_date(request.form.get("report_date", ""))
             section_number = _parse_section_number(request.form.get("section_number", ""), preset)
             mode, instruction, model = process_options()

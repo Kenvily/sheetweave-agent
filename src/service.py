@@ -21,7 +21,7 @@ from .validator import validate_report
 def prepare_report(
     input_path: Path,
     *,
-    preset_id: str = "rd3",
+    preset_id: str | None = None,
     requested_week: str | None = None,
     sheet: str | None = None,
     field_mapping: dict[str, str] | None = None,
@@ -30,6 +30,8 @@ def prepare_report(
     preset: RulePreset | None = None,
 ) -> tuple[PreparedReport, RulePreset]:
     """Parse an input and create traceable original-mode content blocks."""
+    if preset is None and not preset_id:
+        raise ValueError("请先新建并保存方案，再选择方案生成周报。")
     preset = preset or load_rule_preset(preset_id, rules_dir)
     source = parse_input(
         input_path,
@@ -195,7 +197,7 @@ def generate_report(
     requested_week: str | None = None,
     section_number: int | None = None,
     *,
-    preset_id: str = "rd3",
+    preset_id: str | None = None,
     sheet: str | None = None,
     field_mapping: dict[str, str] | None = None,
     display_filename: str | None = None,

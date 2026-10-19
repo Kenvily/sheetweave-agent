@@ -11,6 +11,8 @@ from weekly_report_agent.llm import LLMConfig, LLMService
 from weekly_report_agent.web import DOCX_MIME_TYPE, _inline_diff, _unified_diff, create_app
 from weekly_report_agent.web_sessions import SnapshotStore
 
+pytestmark = pytest.mark.usefixtures("saved_generation_profiles")
+
 ROOT = Path(__file__).resolve().parents[1]
 TEMPLATE = ROOT / "data/研发三部周报模板-v2.docx"
 MULTI_SOURCE_CSV = (
@@ -84,7 +86,7 @@ def _application(tmp_path: Path, fake=None):
 def _preview(client, content: bytes = MULTI_SOURCE_CSV, *, mode: str = "original"):
     data = {
         "csv_file": (io.BytesIO(content), "weekly.csv"),
-        "preset": "general",
+        "preset": "p_general",
         "report_date": "2026-10-10",
         "content_mode": mode,
         "model": "deepseek-chat",
@@ -204,7 +206,7 @@ def test_original_preview_shows_exported_normalized_body(tmp_path: Path, preset:
         "/preview",
         data={
             "csv_file": (io.BytesIO(source.encode()), "synthetic.csv"),
-            "preset": preset,
+            "preset": f"p_{preset}",
             "report_date": "2026-10-10",
             "content_mode": "original",
         },

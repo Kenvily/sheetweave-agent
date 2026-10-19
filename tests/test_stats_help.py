@@ -5,12 +5,15 @@ from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
+import pytest
 from openpyxl import load_workbook
 
 from weekly_report_agent import stats as stats_module
 from weekly_report_agent.stats import UsageMetrics, UsageStats
 from weekly_report_agent.web import DOCX_MIME_TYPE, create_app
 from weekly_report_agent.web_sessions import SnapshotStore
+
+pytestmark = pytest.mark.usefixtures("saved_generation_profiles")
 
 ROOT = Path(__file__).resolve().parents[1]
 TEMPLATE = ROOT / "data/研发三部周报模板-v2.docx"
@@ -35,7 +38,7 @@ def _app(tmp_path: Path, stats=None):
 def _generation_form(task_id: str) -> dict:
     return {
         "csv_file": (io.BytesIO(GENERAL_CSV), "weekly.csv"),
-        "preset": "general",
+        "preset": "p_general",
         "report_date": "2026-10-10",
         "content_mode": "original",
         "generation_task_id": task_id,

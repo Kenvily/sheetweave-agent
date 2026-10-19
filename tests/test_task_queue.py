@@ -14,6 +14,8 @@ from weekly_report_agent.task_worker import TaskRunner
 from weekly_report_agent.web import create_app
 from weekly_report_agent.web_sessions import SnapshotStore
 
+pytestmark = pytest.mark.usefixtures("saved_generation_profiles")
+
 
 def _queue(tmp_path, **options):
     return TaskQueue(tmp_path / "queue.sqlite3", tmp_path / "files", **options)
@@ -31,7 +33,7 @@ def _form(mode="original"):
             io.BytesIO("项目,本周工作\n合成项目,完成验证，AUC 0.81\n".encode()),
             "synthetic.csv",
         ),
-        "preset": "general",
+        "preset": "p_general",
         "report_date": "2026-10-12",
         "content_mode": mode,
     }

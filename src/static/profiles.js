@@ -107,9 +107,10 @@
       const sources=document.createElement('div'); sources.className='source-options';
       const choices=Object.keys(assigned).filter(name=>assigned[name]!=='project');
       for(const name of choices) {
-        const check=input(`目录 ${index+1} 使用 ${name}`,group.sources.has(name),'checkbox');
+        const title=mappedLabel(rows.find(row=>row.column.name===name));
+        const check=input(`目录 ${index+1} 使用 ${title}`,group.sources.has(name),'checkbox');
         check.addEventListener('change',()=>check.checked?group.sources.add(name):group.sources.delete(name));
-        const label=document.createElement('label'); label.append(check,document.createTextNode(name)); sources.append(label);
+        const label=document.createElement('label'); label.append(check,document.createTextNode(title)); sources.append(label);
       }
       box.append(sources);
       const sourceHelp=document.createElement('p');
@@ -118,7 +119,7 @@
       const matches=document.createElement('div'); matches.className='match-options';
       const candidates=rows.filter(row=>Object.hasOwn(group.match,row.select.value)&&row.select.value);
       for(const row of candidates) {
-        const name=mappedLabel(row), key=row.select.value, options=document.createElement('fieldset');
+        const name=row.column.name, key=row.select.value, options=document.createElement('fieldset');
         options.className='match-values';
         const legend=document.createElement('legend');legend.textContent=`归入此目录的${name}（可多选）`;
         options.append(legend);
@@ -148,8 +149,8 @@
       filterTitle.textContent='只处理指定行（可选）';
       filter.open=Object.keys(group.match).length>0;
       const fieldSelect=document.createElement('select');fieldSelect.setAttribute('aria-label',`目录 ${index+1} 添加筛选字段`);
-      fieldSelect.append(new Option('选择已映射字段',''));
-      for(const row of rows.filter(row=>row.select.value&&!Object.hasOwn(group.match,row.select.value)))fieldSelect.append(new Option(mappedLabel(row),row.select.value));
+      fieldSelect.append(new Option('选择 Excel 字段',''));
+      for(const row of rows.filter(row=>row.select.value&&!Object.hasOwn(group.match,row.select.value)))fieldSelect.append(new Option(row.column.name,row.select.value));
       const addCondition=document.createElement('button');addCondition.type='button';addCondition.className='secondary';addCondition.textContent='添加条件';
       addCondition.disabled=true;fieldSelect.addEventListener('change',()=>addCondition.disabled=!fieldSelect.value);
       addCondition.addEventListener('click',()=>{group.match[fieldSelect.value]=[];renderGroups();updateSave();});

@@ -4,8 +4,12 @@ import zipfile
 from collections.abc import Sequence
 from pathlib import Path
 
+import pytest
+
 from weekly_report_agent.llm import LLMConfig, LLMService
 from weekly_report_agent.web import DOCX_MIME_TYPE, create_app
+
+pytestmark = pytest.mark.usefixtures("saved_generation_profiles")
 
 ROOT = Path(__file__).resolve().parents[1]
 CSV_CONTENT = "项目,本周工作\n项目甲,完成 AUC 0.81 验证\n".encode()
@@ -48,7 +52,7 @@ def _client(fake: WebFakeClient, tmp_path: Path | None = None):
 def _form(*, mode: str = "polish", consent: bool = True):
     form = {
         "csv_file": (io.BytesIO(CSV_CONTENT), "general.csv"),
-        "preset": "general",
+        "preset": "p_general",
         "report_date": "2026-10-10",
         "content_mode": mode,
         "model": "deepseek-chat",

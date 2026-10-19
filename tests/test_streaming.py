@@ -1,7 +1,6 @@
 import io
 import json
 import urllib.error
-from pathlib import Path
 from threading import Event
 
 import pytest
@@ -10,6 +9,8 @@ from weekly_report_agent.llm import LLMClientError, LLMConfig, LLMService, OpenA
 from weekly_report_agent.web import create_app
 from weekly_report_agent.web_sessions import SnapshotStore
 from weekly_report_agent.web_stream import GenerationCancelled, stream_events
+
+pytestmark = pytest.mark.usefixtures("saved_generation_profiles")
 
 
 def _packet(content: str, finish=None) -> bytes:
@@ -105,7 +106,7 @@ def _form():
             io.BytesIO("项目,本周工作\n合成项目,验证 AUC 0.81\n".encode()),
             "synthetic.csv",
         ),
-        "preset": "general",
+        "preset": "p_general",
         "report_date": "2026-10-12",
         "content_mode": "polish",
     }
@@ -176,9 +177,5 @@ def test_original_stream_is_offline(tmp_path) -> None:
     app = create_app(snapshot_store=store)
     form = _form()
     form["content_mode"] = "original"
-    form["template_file"] = (
-        io.BytesIO(Path("data/研发三部周报模板-v2.docx").read_bytes()),
-        "synthetic-template.docx",
-    )
     response = app.test_client().post("/preview-stream", data=form)
     assert b"event: complete" in response.data and b"event: delta" not in response.data

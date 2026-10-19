@@ -1,7 +1,11 @@
 import zipfile
 from pathlib import Path
 
+import pytest
+
 from weekly_report_agent.cli import main
+
+pytestmark = pytest.mark.usefixtures("saved_generation_profiles")
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -13,8 +17,8 @@ def test_cli_generates_report_from_repository_fixtures(tmp_path: Path) -> None:
         [
             "--input",
             str(ROOT / "data/周报-v1.csv"),
-            "--template",
-            str(ROOT / "data/研发三部周报模板-v2.docx"),
+            "--profile",
+            "p_rd3",
             "--output",
             str(output),
             "--week",

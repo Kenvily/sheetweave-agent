@@ -514,3 +514,126 @@ def test_admin_list_filter_and_explicit_delete(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr("builtins.input", lambda _: profile_id)
     assert module.main(["--no-env", "delete", profile_id]) == 0
     assert library.list() == []
+
+
+def admin_module():
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("manage_profiles", "scripts/manage_profiles.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_admin_menu_queries_details_and_recovers_from_bad_input(tmp_path, monkeypatch, capsys):
+    module = admin_module()
+    _, _, rule = proposal(tmp_path)
+    library = ProfileStore.from_environment()
+    profile_id, _ = library.save(rule, TEMPLATE)
+    answers = iter(["invalid", "1", "2", profile_id, "3", "-2", "4", "1", "0"])
+    monkeypatch.setattr("builtins.input", lambda _: next(answers))
+    assert module.main(["--no-env"]) == 0
+    output = capsys.readouterr().out
+    assert "无效选项" in output and "操作失败" in output
+    assert profile_id in output and "方案详情" in output and "最近提交" in output
+    assert "已退出" in output and library.list()
+
+
+def test_admin_menu_requires_full_id_and_can_continue_after_deletion(tmp_path, monkeypatch, capsys):
+    module = admin_module()
+    _, _, rule = proposal(tmp_path)
+    library = ProfileStore.from_environment()
+    profile_id, _ = library.save(rule, TEMPLATE)
+    answers = iter(["5", "1", "yes", "1", "5", "1", profile_id, "1", "0"])
+    monkeypatch.setattr("builtins.input", lambda _: next(answers))
+    assert module.main(["--no-env"]) == 0
+    output = capsys.readouterr().out
+    assert "已取消，未删除" in output and "已删除" in output
+    assert "没有符合条件" in output
+    assert library.list() == []
+
+
+def test_admin_menu_keeps_active_profile_and_exits_cleanly_on_eof(tmp_path, monkeypatch, capsys):
+    from weekly_report_agent.task_queue import TaskQueue
+
+    module = admin_module()
+    _, _, rule = proposal(tmp_path)
+    library = ProfileStore.from_environment()
+    profile_id, _ = library.save(rule, TEMPLATE)
+    queue = TaskQueue.from_environment()
+    task, _ = queue.new_directory()
+    queue.enqueue(task, "generate", {"preset": profile_id})
+    answers = iter(["5", "1", profile_id])
+
+    def answer(_):
+        try:
+            return next(answers)
+        except StopIteration:
+            raise EOFError from None
+
+    monkeypatch.setattr("builtins.input", answer)
+    assert module.main(["--no-env"]) == 0
+    assert "仍有任务引用" in capsys.readouterr().out
+    assert library.load(profile_id)
+
+
+def test_profile_rename_preserves_immutable_history_rules_template_and_usage(tmp_path):
+    _, _, rule = proposal(tmp_path)
+    library = ProfileStore.from_environment()
+    profile_id, _ = library.save(
+        rule, TEMPLATE, description="合成说明", evidence={"synthetic": True}
+    )
+    library.used(profile_id)
+    library.used(profile_id, successful=True)
+    old_preset, old_template, old_metadata = library.load(profile_id)
+    before = library.list()[0]
+    old_json = (old_template.parent / "profile.json").read_bytes()
+    assert library.rename(profile_id, "新的方案名称", expected_version=1) == 2
+    preset, template, metadata = library.load(profile_id)
+    assert preset.name == library.list()[0]["name"] == "新的方案名称"
+    assert template.read_bytes() == old_template.read_bytes()
+    assert (old_template.parent / "profile.json").read_bytes() == old_json
+    assert library.load(profile_id, 1)[0].name == old_preset.name
+    assert metadata["description"] == old_metadata["description"]
+    assert metadata["evidence"] == old_metadata["evidence"]
+    for key in ["usage_count", "created", "last_used", "last_successful"]:
+        assert library.list()[0][key] == before[key]
+    assert {**metadata["rule"], "name": old_preset.name} == old_metadata["rule"]
+    assert library.rename(profile_id, "新的方案名称") == 2
+
+
+@pytest.mark.parametrize("name", ["", "  ", "x" * 101, "错误\n名称"])
+def test_profile_rename_rejects_invalid_names_without_creating_versions(tmp_path, name):
+    _, _, rule = proposal(tmp_path)
+    library = ProfileStore.from_environment()
+    profile_id, _ = library.save(rule, TEMPLATE)
+    with pytest.raises(ValueError, match="方案名称"):
+        library.rename(profile_id, name)
+    assert library.load(profile_id)[2]["version"] == 1
+
+
+def test_admin_menu_rename_supports_cancel_and_continues_querying(tmp_path, monkeypatch, capsys):
+    module = admin_module()
+    _, _, rule = proposal(tmp_path)
+    library = ProfileStore.from_environment()
+    profile_id, _ = library.save(rule, TEMPLATE)
+    answers = iter(["6", "1", "", "6", "1", "交互重命名", "1", "0"])
+    monkeypatch.setattr("builtins.input", lambda _: next(answers))
+    assert module.main(["--no-env"]) == 0
+    output = capsys.readouterr().out
+    assert "名称未修改" in output and "已重命名" in output and "交互重命名" in output
+    assert library.load(profile_id)[0].name == "交互重命名"
+    assert library.load(profile_id)[2]["version"] == 2
+
+
+def test_admin_rename_command_and_stale_version_protection(tmp_path, capsys):
+    module = admin_module()
+    _, _, rule = proposal(tmp_path)
+    library = ProfileStore.from_environment()
+    profile_id, _ = library.save(rule, TEMPLATE)
+    assert module.main(["--no-env", "rename", profile_id, "命令行名称"]) == 0
+    assert "已重命名" in capsys.readouterr().out
+    with pytest.raises(ValueError, match="已更新"):
+        library.rename(profile_id, "过期修改", expected_version=1)
+    assert library.load(profile_id)[0].name == "命令行名称"
+    assert library.load(profile_id)[2]["version"] == 2

@@ -3,7 +3,11 @@ import zipfile
 from datetime import date
 from pathlib import Path
 
+import pytest
+
 from weekly_report_agent.web import DOCX_MIME_TYPE, create_app
+
+pytestmark = pytest.mark.usefixtures("saved_generation_profiles")
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -32,6 +36,7 @@ def test_root_post_compatibly_generates_instead_of_returning_405() -> None:
     response = _client().post(
         "/",
         data={
+            "preset": "p_rd3",
             "csv_file": (io.BytesIO((ROOT / "data/周报-v1.csv").read_bytes()), "周报.csv"),
             "week": "第1周",
             "report_date": "2026-09-24",
@@ -67,6 +72,7 @@ def test_web_generates_download_with_custom_section_number() -> None:
     response = _client().post(
         "/generate",
         data={
+            "preset": "p_rd3",
             "csv_file": (io.BytesIO((ROOT / "data/周报-v1.csv").read_bytes()), "周报.csv"),
             "week": "第1周",
             "report_date": "2026-09-24",
@@ -90,6 +96,7 @@ def test_web_rejects_invalid_upload() -> None:
     response = _client().post(
         "/generate",
         data={
+            "preset": "p_rd3",
             "csv_file": (io.BytesIO(b"invalid"), "weekly.txt"),
             "report_date": date(2026, 9, 24).isoformat(),
             "section_number": "9",
@@ -105,6 +112,7 @@ def test_web_rejects_invalid_section_number() -> None:
     response = _client().post(
         "/generate",
         data={
+            "preset": "p_rd3",
             "csv_file": (io.BytesIO((ROOT / "data/周报-v1.csv").read_bytes()), "周报.csv"),
             "report_date": "2026-09-24",
             "section_number": "0",
@@ -137,7 +145,7 @@ def test_input_options_discovers_rd3_weeks() -> None:
         "/input-options",
         data={
             "csv_file": (io.BytesIO((ROOT / "data/周报-v1.csv").read_bytes()), "周报.csv"),
-            "preset": "rd3",
+            "preset": "p_rd3",
         },
         content_type="multipart/form-data",
     )
@@ -153,7 +161,7 @@ def test_input_options_discovers_rd3_weeks() -> None:
 def test_input_options_returns_json_error_for_invalid_file() -> None:
     response = _client().post(
         "/input-options",
-        data={"csv_file": (io.BytesIO(b"invalid"), "weekly.txt"), "preset": "rd3"},
+        data={"csv_file": (io.BytesIO(b"invalid"), "weekly.txt"), "preset": "p_rd3"},
         content_type="multipart/form-data",
     )
 

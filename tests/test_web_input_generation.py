@@ -3,11 +3,14 @@ import zipfile
 from datetime import date
 from pathlib import Path
 
+import pytest
 from openpyxl import Workbook
 
 from weekly_report_agent.service import generate_report
 from weekly_report_agent.validator import validate_report
 from weekly_report_agent.web import DOCX_MIME_TYPE, create_app
+
+pytestmark = pytest.mark.usefixtures("saved_generation_profiles")
 
 ROOT = Path(__file__).resolve().parents[1]
 GENERAL_CSV = (
@@ -67,7 +70,7 @@ def test_web_previews_xlsx_raw_rows_mapping_and_blocks(tmp_path: Path) -> None:
         "/preview",
         data={
             "csv_file": (io.BytesIO(xlsx.read_bytes()), "示例.xlsx"),
-            "preset": "general",
+            "preset": "p_general",
             "sheet": "数据",
             "report_date": "2026-10-10",
         },
@@ -99,7 +102,7 @@ def test_web_generates_general_xlsx_docx() -> None:
         "/generate",
         data={
             "csv_file": (stream, "通用.xlsx"),
-            "preset": "general",
+            "preset": "p_general",
             "sheet": "周报",
             "report_date": "2026-10-10",
             "section_number": "",
@@ -133,7 +136,7 @@ def test_input_options_discovers_xlsx_sheets(tmp_path: Path) -> None:
         "/input-options",
         data={
             "csv_file": (io.BytesIO(xlsx.read_bytes()), "周报.xlsx"),
-            "preset": "general",
+            "preset": "p_general",
             "sheet": "周报二",
         },
         content_type="multipart/form-data",
