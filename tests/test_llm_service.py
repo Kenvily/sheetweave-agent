@@ -343,7 +343,11 @@ def test_prompt_exposes_only_editable_text_and_readonly_context(tmp_path: Path) 
         "immutable_context",
         "protected_facts",
         "length_target",
+        "primary_body",
     }
+    assert payload["primary_body"] == [
+        row.fields["content"] for row in prepared.sources_for_block(prepared.blocks[0].block_id)
+    ]
     assert set(payload["length_target"]) == {
         "source_chars",
         "minimum_chars",

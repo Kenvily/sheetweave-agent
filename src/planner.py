@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import re
 from collections import OrderedDict
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import date
 
+from .content_builder import block_heading_path
 from .models import (
     ParagraphKind,
     PreparedReport,
@@ -275,4 +276,101 @@ def build_prepared_report_plan(
         section_number=start,
         item_count=len(prepared.source.sources),
         paragraphs=tuple(paragraphs),
+    )
+
+
+def prepared_body_paragraphs(prepared, preset, report_date):
+    """Return each block's actual body numbering, including shared directory leaves."""
+    from .numbering import format_body
+
+    result, offsets = {}, {}
+    sections = {section.id: section for section in preset.sections}
+    for block in prepared.blocks:
+        section = sections[block.section_id]
+        key = block_heading_path(prepared, section, block) or (block.block_id,)
+        start = offsets.get(key, 0)
+        texts = [block.effective_text]
+        if block.effective_version == "original" and len(block.source_ids) > 1:
+            # Separate source lists may both restart at 1; keep them as sibling lists.
+            records = {row.source_id: row for row in prepared.source.sources}
+            fields = block.source_fields or (block.source_field,)
+            texts = [
+                "\n".join(records[source_id].fields.get(key, "").strip() for key in fields)
+                for source_id in block.source_ids
+            ]
+        paragraphs = []
+        local_offset = 0
+        for text in texts:
+            segment = list(build_body_paragraphs(text, report_date))
+            for paragraph in segment:
+                if paragraph.kind is ParagraphKind.BODY_1:
+                    match = TOP_LEVEL_NUMBER.match(paragraph.text)
+                    paragraph = replace(
+                        paragraph, text=f"{int(match[1]) + local_offset}、{match[2]}"
+                    )
+                paragraphs.append(paragraph)
+            local_offset += sum(p.kind is ParagraphKind.BODY_1 for p in segment)
+        adjusted = []
+        for paragraph in paragraphs:
+            if paragraph.kind is ParagraphKind.BODY_1:
+                match = TOP_LEVEL_NUMBER.match(paragraph.text)
+                paragraph = ReportParagraph(f"{int(match[1]) + start}、{match[2]}", paragraph.kind)
+            adjusted.append(paragraph)
+        offsets[key] = start + sum(p.kind is ParagraphKind.BODY_1 for p in paragraphs)
+        result[block.block_id] = tuple(
+            replace(p, block_id=block.block_id)
+            for p in format_body(adjusted, preset.document.numbering)
+        )
+    return result
+
+
+def build_directory_plan(prepared, preset, report_date, section_number):
+    """Route source blocks into an explicit ordered hierarchy independent of Excel columns."""
+
+    from .numbering import validate_numbering
+
+    # Build canonical prefixes first; the service applies configured numbering exactly once.
+    canonical_preset = replace(
+        preset, document=replace(preset.document, numbering=validate_numbering())
+    )
+    bodies = prepared_body_paragraphs(prepared, canonical_preset, report_date)
+    tree = {}
+    for section in preset.sections:
+        blocks = [block for block in prepared.blocks if block.section_id == section.id]
+        if not blocks:
+            continue
+        for block in blocks:
+            node = tree
+            for title in block_heading_path(prepared, section, block):
+                child = node.setdefault(title, {"children": {}, "blocks": []})
+                node = child["children"]
+            child["blocks"].append(block)
+    paragraphs = [
+        ReportParagraph(preset.document.report_title, ParagraphKind.TITLE),
+        ReportParagraph(report_date.strftime("%Y%m%d"), ParagraphKind.DATE),
+    ]
+
+    def walk(nodes, parents=()):
+        for index, (title, node) in enumerate(nodes.items(), section_number if not parents else 1):
+            numbers = parents + (index,)
+            if index > 999:
+                raise ValueError("标题编号超过999。")
+            prefix = ".".join(str(n) for n in numbers) + ". "
+            paragraphs.append(
+                ReportParagraph(
+                    prefix + normalize_report_text(title, report_date),
+                    ParagraphKind(f"heading_{len(numbers)}"),
+                )
+            )
+            for block in node["blocks"]:
+                paragraphs.extend(bodies[block.block_id])
+            walk(node["children"], numbers)
+
+    walk(tree)
+    return ReportPlan(
+        report_date,
+        prepared.source.source_label,
+        section_number,
+        len(prepared.source.sources),
+        tuple(paragraphs),
     )

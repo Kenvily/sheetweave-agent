@@ -9,24 +9,23 @@ import zipfile
 from pathlib import Path
 from xml.etree import ElementTree as ET
 
+from .document_style import default_styles, paragraph_style
 from .docx_security import inspect_docx_package
 from .models import ParagraphKind, ReportParagraph, ReportPlan
 
 WORD_NS = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
 XML_NS = "http://www.w3.org/XML/1998/namespace"
 DOCUMENT_PART = "word/document.xml"
+STYLES_PART = "word/styles.xml"
 ET.register_namespace("w", WORD_NS)
 
+# Compatibility export; the style contract is the single source of defaults.
 FONT_SETTINGS: dict[ParagraphKind, tuple[str, str, bool]] = {
-    ParagraphKind.TITLE: ("Microsoft YaHei", "32", True),
-    ParagraphKind.DATE: ("SimSun", "42", True),
-    ParagraphKind.HEADING_1: ("Microsoft YaHei", "32", True),
-    ParagraphKind.HEADING_2: ("Microsoft YaHei", "30", True),
-    ParagraphKind.HEADING_3: ("Microsoft YaHei", "28", True),
-    ParagraphKind.BODY_1: ("SimSun", "21", False),
-    ParagraphKind.BODY_2: ("SimSun", "21", False),
-    ParagraphKind.BODY_3: ("SimSun", "21", False),
+    kind: (values["font"], str(round(values["size_pt"] * 2)), values["bold"])
+    for kind in ParagraphKind
+    for values in [default_styles()[kind.value]]
 }
+
 BODY_KINDS = {
     ParagraphKind.BODY_1,
     ParagraphKind.BODY_2,
@@ -47,32 +46,45 @@ def _property(parent: ET.Element, name: str, **attributes: str) -> ET.Element:
     return ET.SubElement(parent, _qn(name), {_qn(key): value for key, value in attributes.items()})
 
 
-def _paragraph_element(paragraph: ReportParagraph) -> ET.Element:
+def _paragraph_element(
+    paragraph: ReportParagraph,
+    styles: dict | None = None,
+    heading_styles: dict[ParagraphKind, str] | None = None,
+) -> ET.Element:
     node = ET.Element(_qn("p"))
     properties = ET.SubElement(node, _qn("pPr"))
+    if paragraph.kind in HEADING_KINDS and heading_styles:
+        _property(properties, "pStyle", val=heading_styles[paragraph.kind])
 
     if paragraph.kind in {ParagraphKind.TITLE, ParagraphKind.DATE}:
         _property(properties, "jc", val="center")
-    spacing = {"line": "360", "lineRule": "auto"}
-    if paragraph.kind in HEADING_KINDS:
-        spacing.update(before="120", after="120")
+    style = paragraph_style(paragraph.kind, styles)
+    spacing = style.attributes()
     _property(properties, "spacing", **spacing)
-    if paragraph.kind in BODY_KINDS:
-        _property(properties, "ind", firstLineChars="200")
+    if paragraph.kind in BODY_KINDS or style.first_line_chars:
+        _property(properties, "ind", firstLineChars=str(round(style.first_line_chars * 100)))
+    outline = (
+        int(paragraph.kind.value.rsplit("_", 1)[1]) - 1 if paragraph.kind in HEADING_KINDS else 9
+    )
+    _property(properties, "outlineLvl", val=str(outline))
 
     run = ET.SubElement(node, _qn("r"))
     run_properties = ET.SubElement(run, _qn("rPr"))
-    font, size, bold = FONT_SETTINGS[paragraph.kind]
+    font, size, bold = style.font, str(round(style.size_pt * 2)), style.bold
     _property(
         run_properties,
         "rFonts",
         ascii=font,
         hAnsi=font,
-        eastAsia="微软雅黑" if font == "Microsoft YaHei" else "宋体",
+        eastAsia={"Microsoft YaHei": "微软雅黑", "SimSun": "宋体"}.get(font, font),
         cs=font,
     )
     if bold:
         _property(run_properties, "b")
+    elif bold is False and styles is not None:
+        _property(run_properties, "b", val="0")
+    if styles is not None and bold is not None:
+        _property(run_properties, "bCs", val="1" if bold else "0")
     _property(run_properties, "sz", val=size)
     _property(run_properties, "szCs", val=size)
     text = ET.SubElement(run, _qn("t"), {f"{{{XML_NS}}}space": "preserve"})
@@ -80,7 +92,40 @@ def _paragraph_element(paragraph: ReportParagraph) -> ET.Element:
     return node
 
 
-def _document_xml(plan: ReportPlan, template_xml: bytes) -> bytes:
+def _heading_style_definitions(template_xml: bytes) -> tuple[bytes, dict[ParagraphKind, str]]:
+    """Add outline-aware paragraph styles without replacing any template styles."""
+    root = ET.fromstring(template_xml)
+    existing_ids = {node.get(_qn("styleId")) for node in root.findall(_qn("style"))}
+    existing_names = {
+        node.get(_qn("val")) for node in root.findall(f"{_qn('style')}/{_qn('name')}")
+    }
+    mapping = {}
+    for level in range(1, 4):
+        style_id, name = f"DocAgentHeading{level}", f"docAgent 标题 {level}"
+        suffix = 1
+        while style_id in existing_ids or name in existing_names:
+            suffix += 1
+            style_id, name = f"DocAgentHeading{level}_{suffix}", f"docAgent 标题 {level} ({suffix})"
+        node = ET.SubElement(
+            root,
+            _qn("style"),
+            {_qn("type"): "paragraph", _qn("customStyle"): "1", _qn("styleId"): style_id},
+        )
+        _property(node, "name", val=name)
+        _property(node, "uiPriority", val="9")
+        _property(node, "qFormat")
+        properties = ET.SubElement(node, _qn("pPr"))
+        _property(properties, "outlineLvl", val=str(level - 1))
+        mapping[ParagraphKind(f"heading_{level}")] = style_id
+    return ET.tostring(root, encoding="utf-8", xml_declaration=True), mapping
+
+
+def _document_xml(
+    plan: ReportPlan,
+    template_xml: bytes,
+    styles: dict | None = None,
+    heading_styles: dict[ParagraphKind, str] | None = None,
+) -> bytes:
     template_root = ET.fromstring(template_xml)
     template_body = template_root.find(_qn("body"))
     section_properties = None
@@ -92,7 +137,7 @@ def _document_xml(plan: ReportPlan, template_xml: bytes) -> bytes:
     root = ET.Element(_qn("document"))
     body = ET.SubElement(root, _qn("body"))
     for paragraph in plan.paragraphs:
-        body.append(_paragraph_element(paragraph))
+        body.append(_paragraph_element(paragraph, styles, heading_styles))
     if section_properties is not None:
         body.append(section_properties)
     else:
@@ -102,7 +147,9 @@ def _document_xml(plan: ReportPlan, template_xml: bytes) -> bytes:
     return ET.tostring(root, encoding="utf-8", xml_declaration=True)
 
 
-def render_docx(plan: ReportPlan, template_path: Path, output_path: Path) -> None:
+def render_docx(
+    plan: ReportPlan, template_path: Path, output_path: Path, *, styles: dict | None = None
+) -> None:
     """Copy a template package and replace its main document with the report plan."""
     if not template_path.is_file():
         raise FileNotFoundError(f"模板文件不存在：{template_path}")
@@ -118,14 +165,24 @@ def render_docx(plan: ReportPlan, template_path: Path, output_path: Path) -> Non
         with zipfile.ZipFile(template_path, "r") as source:
             if DOCUMENT_PART not in source.namelist():
                 raise ValueError("模板不是有效的 DOCX：缺少 word/document.xml。")
-            replacement = _document_xml(plan, source.read(DOCUMENT_PART))
+            style_xml, heading_styles = _heading_style_definitions(source.read(STYLES_PART))
+            replacements = {
+                DOCUMENT_PART: _document_xml(
+                    plan, source.read(DOCUMENT_PART), styles, heading_styles
+                ),
+                STYLES_PART: style_xml,
+            }
             with tempfile.NamedTemporaryFile(
                 dir=output_path.parent, suffix=".docx", delete=False
             ) as temporary:
                 temporary_name = temporary.name
             with zipfile.ZipFile(temporary_name, "w") as destination:
                 for info in source.infolist():
-                    payload = replacement if info.filename == DOCUMENT_PART else source.read(info)
+                    payload = (
+                        replacements[info.filename]
+                        if info.filename in replacements
+                        else source.read(info)
+                    )
                     destination.writestr(info, payload)
         os.replace(temporary_name, output_path)
         temporary_name = None

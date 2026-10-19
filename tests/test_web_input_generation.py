@@ -18,7 +18,7 @@ GENERAL_CSV = (
 
 
 def _client():
-    app = create_app(ROOT / "data/研发三部周报模板.docx")
+    app = create_app(ROOT / "data/研发三部周报模板-v2.docx")
     app.config["TESTING"] = True
     return app.test_client()
 
@@ -30,7 +30,7 @@ def test_general_preset_generates_configured_sections_with_default_start(tmp_pat
 
     plan = generate_report(
         source,
-        ROOT / "data/研发三部周报模板.docx",
+        ROOT / "data/研发三部周报模板-v2.docx",
         output,
         date(2026, 10, 10),
         preset_id="general",

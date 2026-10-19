@@ -7,6 +7,7 @@
   </a>
   <nav aria-label="主导航">
     <a href="{{ url_for('index') }}"{% if active == 'create' %} aria-current="page"{% endif %}>新建周报</a>
+    <a href="{{ url_for('profiles.library') }}"{% if active == 'profiles' %} aria-current="page"{% endif %}>方案适配</a>
     <a href="{{ url_for('help_page') }}"{% if active == 'help' %} aria-current="page"{% endif %}>使用帮助</a>
   </nav>
 </header>

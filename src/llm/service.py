@@ -110,7 +110,8 @@ def _immutable_context(prepared: PreparedReport, block: ContentBlock) -> tuple[d
         context = {
             key: source.fields[key]
             for key in READ_ONLY_CONTEXT_FIELDS
-            if key != block.source_field and source.fields.get(key, "").strip()
+            if key not in (block.source_fields or (block.source_field,))
+            and source.fields.get(key, "").strip()
         }
         if context:
             contexts.append(context)
@@ -144,6 +145,10 @@ def _request_block(
         "immutable_context": _immutable_context(prepared, block),
         "protected_facts": protected_facts(block.original_text),
     }
+    if "content" in (block.source_fields or (block.source_field,)):
+        payload["primary_body"] = [
+            row.fields.get("content", "") for row in prepared.sources_for_block(block.block_id)
+        ]
     length_target = _length_target(block.original_text, mode)
     if length_target is not None:
         payload["length_target"] = length_target
@@ -178,6 +183,7 @@ def _messages(
     source = [_request_block(prepared, block, mode) for block in blocks]
     system = (
         "你是公司周报文本整理器，只能改写 editable_text。"
+        "primary_body若存在表示主要正文，围绕其主题整合其他已选正文，不能遗漏补充正文的事实。"
         "mode_contract 是本次模式必须执行的写作契约，不是参考建议；"
         "必须按其中的 objective、length_rule、organization、required_actions 和 "
         "forbidden_actions 生成明显符合所选模式的结果。每个块的 length_target 是具体字数目标；"

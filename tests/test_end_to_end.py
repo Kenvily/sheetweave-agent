@@ -12,9 +12,9 @@ def test_cli_generates_report_from_repository_fixtures(tmp_path: Path) -> None:
     exit_code = main(
         [
             "--input",
-            str(ROOT / "data/周报.csv"),
+            str(ROOT / "data/周报-v1.csv"),
             "--template",
-            str(ROOT / "data/研发三部周报模板.docx"),
+            str(ROOT / "data/研发三部周报模板-v2.docx"),
             "--output",
             str(output),
             "--week",

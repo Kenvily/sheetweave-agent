@@ -13,7 +13,7 @@ from weekly_report_agent.web import DOCX_MIME_TYPE, create_app
 from weekly_report_agent.web_sessions import SnapshotStore
 
 ROOT = Path(__file__).resolve().parents[1]
-TEMPLATE = ROOT / "data/研发三部周报模板.docx"
+TEMPLATE = ROOT / "data/研发三部周报模板-v2.docx"
 GENERAL_CSV = "项目,本周工作\n项目甲,完成接口联调\n".encode()
 
 
@@ -98,7 +98,7 @@ def test_homepage_cookie_metrics_help_and_examples(tmp_path: Path) -> None:
     help_page = client.get("/help")
 
     assert first.status_code == second.status_code == help_page.status_code == 200
-    assert "独立访客（估算）" in first.text
+    assert "访客" in first.text
     assert stats.metrics().estimated_visitors == 1
     assert stats.metrics().page_views == 3
     assert "访问次数" in first.text

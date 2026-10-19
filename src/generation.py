@@ -8,7 +8,7 @@ from datetime import date
 from pathlib import Path
 
 from .llm import ContentMode, LLMService
-from .rules import load_rule_preset
+from .rules import load_rule_preset, preset_payload, validate_rule_preset
 from .service import prepare_report, process_report, render_prepared_report
 from .web_sessions import SnapshotStore
 
@@ -25,13 +25,18 @@ def generate_snapshot(
     before_publish: Callable[[], None] = lambda: None,
 ) -> str:
     """Run the existing deterministic/LLM pipeline without Flask request state."""
-    preset = load_rule_preset(options["preset"])
+    preset = (
+        validate_rule_preset(options["preset_payload"])
+        if options.get("preset_payload")
+        else load_rule_preset(options["preset"])
+    )
     report_date = date.fromisoformat(options["report_date"])
     mode = ContentMode(options["content_mode"])
     progress("正在解析表格与规则。")
     prepared, preset = prepare_report(
         input_path,
         preset_id=preset.id,
+        preset=preset,
         requested_week=options.get("week"),
         sheet=options.get("sheet"),
         field_mapping=options.get("field_mapping"),
@@ -70,4 +75,5 @@ def generate_snapshot(
             template_content=template_path.read_bytes(),
             report_content=output.read_bytes(),
             download_name=f"{preset.name}-{report_date:%Y%m%d}.docx",
+            rule_payload=preset_payload(preset),
         )

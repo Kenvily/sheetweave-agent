@@ -41,7 +41,7 @@ def discover_week_columns(rows: Sequence[Sequence[str]]) -> tuple[WeekColumn, ..
         month = ""
         for month_index in range(min(index, len(month_header) - 1), -1, -1):
             candidate = month_header[month_index].strip()
-            if candidate:
+            if re.fullmatch(r"(?:\d{4}年)?(?:[1-9]|1[0-2])月", candidate):
                 month = candidate
                 break
         columns.append(WeekColumn(index=index, month=month, week=week))

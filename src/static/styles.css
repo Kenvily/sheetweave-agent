@@ -107,13 +107,6 @@ summary { cursor: pointer; font-size: 0.9rem; font-weight: 700; }
 .option-status { display: none; font-size: 0.95rem; font-weight: 700; }
 .option-status:not(:empty) { display: block; }
 .option-status.error { color: var(--danger); }
-.advanced-grid, .mapping-grid {
-  display: grid;
-  grid-template-columns: repeat(2, 1fr);
-  gap: 14px;
-  margin-top: 16px;
-}
-.mapping-grid { grid-template-columns: repeat(3, 1fr); }
 .compact { gap: 5px; }
 .compact input { min-height: 38px; padding: 7px 10px; font-size: 0.84rem; }
 .actions { display: flex; justify-content: flex-end; gap: 12px; padding-top: 2px; }
@@ -211,7 +204,7 @@ th { position: sticky; top: 0; color: var(--ink); background: #f7f9f9; }
 @media (max-width: 760px) {
   .container { padding: 34px 0; }
   .card { padding: 22px; }
-  .grid, .grid-three, .parameter-grid, .advanced-grid, .mapping-grid { grid-template-columns: 1fr; }
+  .grid, .grid-three, .parameter-grid { grid-template-columns: 1fr; }
   .actions { flex-direction: column; }
   .block-head, .validation-summary { align-items: flex-start; flex-direction: column; }
 }
@@ -725,7 +718,6 @@ h2 { line-height: 1.45; }
 .upload-field { padding: 16px; border: 1px dashed var(--line-strong); border-radius: 9px; background: var(--surface-soft); }
 .upload-field input { background: var(--surface); font-size: .8rem; }
 .mode-hint { margin: 0; padding: 10px 12px; border-radius: 6px; background: var(--surface-soft); color: var(--muted); font-size: .8rem; }
-.advanced-settings { background: var(--surface-soft); }
 .actions { flex-wrap: wrap; align-items: center; padding-top: 20px; border-top: 1px solid var(--line); }
 .action-hint { flex: 1 1 100%; color: var(--muted); font-size: .8rem; }
 .creation-guide { display: grid; gap: 20px; }

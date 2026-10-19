@@ -62,6 +62,7 @@ class ReportParagraph:
 
     text: str
     kind: ParagraphKind
+    block_id: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -111,6 +112,7 @@ class ParsedInput:
     available_sheets: tuple[str, ...] = ()
     month: str = ""
     week: str = ""
+    excluded_sources: tuple[SourceRecord, ...] = ()
 
     @property
     def source_label(self) -> str:
@@ -129,6 +131,7 @@ class ContentBlock:
     source_ids: tuple[str, ...]
     original_text: str
     source_field: str = ""
+    source_fields: tuple[str, ...] = ()
     llm_editable: bool = True
     generated_text: str | None = None
     edited_text: str | None = None

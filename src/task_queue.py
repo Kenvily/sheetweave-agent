@@ -108,7 +108,7 @@ class TaskQueue:
     def enqueue(self, token: str, kind: str, payload: dict) -> None:
         """Persist a ready task only after its uploaded files are complete."""
         self.directory(token)
-        if kind not in {"generate", "regenerate", "pdf"}:
+        if kind not in {"generate", "regenerate", "pdf", "adapt"}:
             raise ValueError("不支持的任务类型。")
         with self.connect() as db:
             db.execute("BEGIN IMMEDIATE")

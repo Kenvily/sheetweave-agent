@@ -12,7 +12,8 @@ from .docx_renderer import render_docx
 from .input_parser import parse_input
 from .llm import ContentMode, LLMService, load_llm_config, parse_content_mode
 from .models import PreparedReport, ReportPlan, WeeklyData, WeeklyItem
-from .planner import build_prepared_report_plan, build_report_plan
+from .numbering import renumber
+from .planner import build_directory_plan, build_prepared_report_plan, build_report_plan
 from .rules import RulePreset, load_rule_preset
 from .validator import validate_report
 
@@ -26,9 +27,10 @@ def prepare_report(
     field_mapping: dict[str, str] | None = None,
     display_filename: str | None = None,
     rules_dir: Path | None = None,
+    preset: RulePreset | None = None,
 ) -> tuple[PreparedReport, RulePreset]:
     """Parse an input and create traceable original-mode content blocks."""
-    preset = load_rule_preset(preset_id, rules_dir)
+    preset = preset or load_rule_preset(preset_id, rules_dir)
     source = parse_input(
         input_path,
         preset,
@@ -160,11 +162,14 @@ def render_prepared_report(
     effective_section = (
         preset.document.heading_start_default if section_number is None else section_number
     )
-    if preset.id == "rd3":
+    if any(section.heading_path for section in preset.sections):
+        plan = build_directory_plan(prepared, preset, report_date, effective_section)
+    elif preset.id == "rd3":
         plan = _legacy_rd3_plan(prepared, report_date, effective_section)
     else:
         plan = build_prepared_report_plan(prepared, preset, report_date, effective_section)
-    render_docx(plan, template_path, output_path)
+    plan = renumber(plan, preset.document.numbering)
+    render_docx(plan, template_path, output_path, styles=preset.document.styles)
     expected_headings = tuple(
         section.title
         for section in preset.sections
@@ -175,6 +180,9 @@ def render_prepared_report(
         effective_section,
         report_title=preset.document.report_title,
         heading_titles=expected_headings,
+        styles=preset.document.styles,
+        numbering=preset.document.numbering,
+        expected_plan=plan,
     )
     return plan
 
@@ -196,6 +204,7 @@ def generate_report(
     custom_instruction: str | None = None,
     model: str | None = None,
     llm_service: LLMService | None = None,
+    preset: RulePreset | None = None,
 ) -> ReportPlan:
     """Generate and validate one deterministic or LLM-assisted weekly report."""
     prepared, preset = prepare_report(
@@ -206,6 +215,7 @@ def generate_report(
         field_mapping=field_mapping,
         display_filename=display_filename,
         rules_dir=rules_dir,
+        preset=preset,
     )
     prepared = process_report(
         prepared,

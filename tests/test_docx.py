@@ -28,7 +28,7 @@ def test_renders_valid_docx_with_all_required_styles(tmp_path: Path) -> None:
     plan = build_report_plan(data, date(2026, 9, 24), section_number=12)
     output = tmp_path / "report.docx"
 
-    render_docx(plan, ROOT / "data/研发三部周报模板.docx", output)
+    render_docx(plan, ROOT / "data/研发三部周报模板-v2.docx", output)
     result = validate_report(output, section_number=12)
 
     assert result.heading_count == 3
@@ -64,3 +64,78 @@ def test_renders_valid_docx_with_all_required_styles(tmp_path: Path) -> None:
             ParagraphKind.BODY_3,
         }:
             assert properties.find(_qn("ind")).get(_qn("firstLineChars")) == "200"
+
+
+def test_heading_styles_define_navigation_levels_without_replacing_template_styles(tmp_path):
+    data = WeeklyData(
+        "2026年9月", "第1周", (WeeklyItem("合成项目", "合成任务", "进行中", "完成验证"),)
+    )
+    plan = build_report_plan(data, date(2026, 9, 24))
+    first, second = tmp_path / "first.docx", tmp_path / "second.docx"
+    render_docx(plan, ROOT / "data/研发三部周报模板-v2.docx", first)
+    # An exported document can itself be uploaded as a template. Its styles must survive.
+    render_docx(plan, first, second)
+    with zipfile.ZipFile(first) as package:
+        previous_styles = ET.fromstring(package.read("word/styles.xml"))
+    with zipfile.ZipFile(second) as package:
+        definitions = ET.fromstring(package.read("word/styles.xml"))
+        document = ET.fromstring(package.read("word/document.xml"))
+    by_id = {node.get(_qn("styleId")): node for node in definitions.findall(_qn("style"))}
+    for node in previous_styles.findall(_qn("style")):
+        assert ET.tostring(by_id[node.get(_qn("styleId"))]) == ET.tostring(node)
+    paragraphs = document.findall(f"{_qn('body')}/{_qn('p')}")
+    for paragraph, planned in zip(paragraphs, plan.paragraphs, strict=True):
+        properties = paragraph.find(_qn("pPr"))
+        expected = {
+            ParagraphKind.HEADING_1: "0",
+            ParagraphKind.HEADING_2: "1",
+            ParagraphKind.HEADING_3: "2",
+        }.get(planned.kind, "9")
+        assert properties.find(_qn("outlineLvl")).get(_qn("val")) == expected
+        if expected != "9":
+            reference = properties.find(_qn("pStyle")).get(_qn("val"))
+            assert reference.endswith("_2")
+            assert (
+                by_id[reference].find(f"{_qn('pPr')}/{_qn('outlineLvl')}").get(_qn("val"))
+                == expected
+            )
+        else:
+            assert properties.find(_qn("pStyle")) is None
+    assert validate_report(second).heading_count == 3
+
+
+def test_validator_rejects_heading_with_visual_format_but_no_outline(tmp_path):
+    import pytest
+
+    from weekly_report_agent.validator import ReportValidationError
+
+    data = WeeklyData(
+        "2026年9月", "第1周", (WeeklyItem("合成项目", "合成任务", "进行中", "完成验证"),)
+    )
+    plan = build_report_plan(data, date(2026, 9, 24))
+    original = tmp_path / "original.docx"
+    render_docx(plan, ROOT / "data/研发三部周报模板-v2.docx", original)
+    for fault in ("missing_outline", "wrong_outline", "missing_style", "missing_definition"):
+        broken = tmp_path / f"{fault}.docx"
+        with zipfile.ZipFile(original) as source, zipfile.ZipFile(broken, "w") as target:
+            for info in source.infolist():
+                payload = source.read(info)
+                if info.filename == "word/document.xml":
+                    root = ET.fromstring(payload)
+                    props = root.findall(f"{_qn('body')}/{_qn('p')}")[2].find(_qn("pPr"))
+                    if fault == "missing_outline":
+                        props.remove(props.find(_qn("outlineLvl")))
+                    elif fault == "wrong_outline":
+                        props.find(_qn("outlineLvl")).set(_qn("val"), "9")
+                    elif fault == "missing_style":
+                        props.remove(props.find(_qn("pStyle")))
+                    payload = ET.tostring(root)
+                elif info.filename == "word/styles.xml" and fault == "missing_definition":
+                    root = ET.fromstring(payload)
+                    for node in list(root):
+                        if node.get(_qn("styleId")) == "DocAgentHeading1":
+                            root.remove(node)
+                    payload = ET.tostring(root)
+                target.writestr(info, payload)
+        with pytest.raises(ReportValidationError, match="大纲级别|标题样式"):
+            validate_report(broken)

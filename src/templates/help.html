@@ -31,10 +31,10 @@
 
     <section class="help-grid">
       <article class="card help-card">
-        <h2>规则预设</h2>
+        <h2>规则与方案</h2>
         <dl>
           <div><dt>研发三部周报</dt><dd>适用于既有多行表头和多周次格式，一级章节默认从 9 开始。</dd></div>
-          <div><dt>通用周报</dt><dd>至少包含“项目”和“本周工作”，可增加问题、下周计划及状态列。</dd></div>
+          <div><dt>已保存方案</dt><dd>其他表格先进入“方案适配”，确认字段、内容保留策略和格式，试生成并保存后在主页选用。示例文件也使用此流程。</dd></div>
         </dl>
       </article>
       <article class="card help-card">
@@ -58,7 +58,8 @@
       <details><summary>任务一直显示排队</summary><p>任务由独立后台进程处理。请确认服务器已启动后台 Worker；多人同时生成时也可能等待可用处理容量。刷新当前页面会重新连接任务。</p></details>
       <details><summary>刷新后找不到报告</summary><p>审核会话默认仅保留两小时。过期后需重新上传，系统不保存历史周报正文。</p></details>
     </section>
-    <p class="help-privacy">页面只显示聚合统计：累计 {{ usage_metrics.total_generations }} 次、本周 {{ usage_metrics.weekly_generations }} 次、独立访客估算 {{ usage_metrics.estimated_visitors }}、访问次数 {{ usage_metrics.page_views }}。统计不保存周报正文、姓名、账号或 IP。</p>
+    <p class="help-privacy">页面只显示聚合统计：累计 {{ usage_metrics.total_generations }} 次、本周 {{ usage_metrics.weekly_generations }} 次、访客 {{ usage_metrics.estimated_visitors }}、访问次数 {{ usage_metrics.page_views }}。统计不保存周报正文、姓名、账号或 IP。</p>
+  <section class="card help-card"><h2>陌生表格与新格式</h2><p>进入<a href="{{ url_for('profiles.library') }}">方案适配</a>，确认字段、状态取舍和段落格式，离线试生成后保存。方案长期保存在服务器，下次直接选用，无需重复上传模板。</p><p>首次识别需确认脱敏样例及模板片段外发，后台自动填入字段、目录和格式，最多两轮方案建议；原文试生成不调用模型。表格、文本框等复杂模板会明确提示不支持。更新方案不会改变已提交任务或审核会话的规则。</p></section>
   </main>
 </body>
 </html>

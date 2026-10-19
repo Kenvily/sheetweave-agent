@@ -14,3 +14,5 @@ def isolate_default_web_state(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -
 
     monkeypatch.setenv("TASK_DB_PATH", str(tmp_path / "tasks.sqlite3"))
     monkeypatch.setenv("TASK_FILES_DIR", str(tmp_path / "task-files"))
+
+    monkeypatch.setenv("REPORT_PROFILES_DIR", str(tmp_path / "profiles"))

@@ -1,22 +1,12 @@
 /* Short polling releases Web request threads between progress updates. */
 (() => {
-  const partialTexts = raw => {
-    const texts = [];
-    const pattern = /"text"\s*:\s*"((?:[^"\\]|\\[\s\S])*)/g;
-    for (const match of raw.matchAll(pattern)) {
-      const value = match[1].replace(/\\u[0-9a-fA-F]{0,3}$/, '');
-      try { texts.push(JSON.parse('"' + value + '"')); } catch (_error) {}
-    }
-    return texts.join('\n\n');
-  };
   const key = () => 'docAgent.pending:' + location.pathname;
   const read = () => { try { return JSON.parse(sessionStorage.getItem(key()) || 'null'); } catch (_error) { return null; } };
   const remember = task => { try { sessionStorage.setItem(key(), JSON.stringify(task)); } catch (_error) {} };
   const forget = () => { try { sessionStorage.removeItem(key()); } catch (_error) {} };
   window.pendingReportTask = read;
-  window.runQueuedReport = async ({form, url, signal, intent = 'preview', resume = false, onProgress, onBatch = () => {}, onComplete}) => {
+  window.runQueuedReport = async ({form, url, signal, intent = 'preview', resume = false, onProgress, onComplete}) => {
     let task = resume ? read() : null;
-    const batches = new Map();
     const abortError = () => new DOMException('已取消等待', 'AbortError');
     if (!task) {
       if (signal?.aborted) throw abortError();
@@ -60,11 +50,7 @@
       if (status.state === 'queued') onProgress(`任务已排队，当前第 ${status.queue_position} 位。等待后台 Worker 处理。`);
       for (const event of status.events) {
         if (event.kind === 'progress') onProgress(event.payload.message);
-        if (event.kind === 'delta') {
-          const batch = event.payload.batch;
-          const raw = (batches.get(batch) || '') + event.payload.text;
-          batches.set(batch, raw); onBatch(batch, partialTexts(raw));
-        }
+
       }
       cursor = status.cursor;
       if (status.state === 'failed' || status.state === 'cancelled') {

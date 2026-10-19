@@ -40,7 +40,7 @@ def _client(fake: WebFakeClient, tmp_path: Path | None = None):
     from weekly_report_agent.web_sessions import SnapshotStore
 
     store = SnapshotStore(tmp_path / "snapshots") if tmp_path is not None else None
-    app = create_app(ROOT / "data/研发三部周报模板.docx", service, store)
+    app = create_app(ROOT / "data/研发三部周报模板-v2.docx", service, store)
     app.config["TESTING"] = True
     return app.test_client()
 

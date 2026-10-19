@@ -30,6 +30,7 @@ class LLMConfig:
     max_batch_chars: int = 12000
     max_concurrency: int = 2
     auto_correct: bool = False
+    reasoning_effort: str | None = None
 
     @property
     def available(self) -> bool:
@@ -40,7 +41,7 @@ class LLMConfig:
         """Require a server-side API key for a remote LLM call."""
         if not self.available:
             raise LLMConfigurationError(
-                "服务器尚未配置 DeepSeek API Key，请配置后重试或选择“原文保留”。"
+                "服务器尚未配置模型 API Key，请配置后重试或选择“原文保留”。"
             )
 
     def select_model(self, model: str | None) -> LLMConfig:
@@ -103,21 +104,31 @@ def validate_llm_config(config: LLMConfig) -> LLMConfig:
         or not 1 <= config.max_concurrency <= 4
     ):
         raise LLMConfigurationError("LLM 超时、重试或批次长度配置无效。")
+    if config.reasoning_effort is not None and not re.fullmatch(
+        r"[a-z][a-z0-9_-]{0,31}", config.reasoning_effort
+    ):
+        raise LLMConfigurationError("LLM_REASONING_EFFORT 格式无效。")
     return replace(config, api_base=api_base, allowed_models=models)
 
 
 def load_llm_config(environ: dict[str, str] | None = None) -> LLMConfig:
     """Load DeepSeek/OpenAI-compatible settings from server environment variables."""
     values = os.environ if environ is None else environ
+
+    def setting(name: str, legacy: str, default: str) -> str:
+        return values[name] if name in values else values.get(legacy, default)
+
     models = tuple(
         item.strip()
-        for item in values.get("DEEPSEEK_MODELS", ",".join(DEFAULT_MODELS)).split(",")
+        for item in setting(
+            "LLM_ALLOWED_MODELS", "DEEPSEEK_MODELS", ",".join(DEFAULT_MODELS)
+        ).split(",")
         if item.strip()
     )
     config = LLMConfig(
-        api_key=values.get("DEEPSEEK_API_KEY", "").strip(),
-        api_base=values.get("DEEPSEEK_API_BASE", DEFAULT_API_BASE),
-        model=values.get("DEEPSEEK_MODEL", DEFAULT_MODEL).strip(),
+        api_key=setting("LLM_API_KEY", "DEEPSEEK_API_KEY", "").strip(),
+        api_base=setting("LLM_API_BASE", "DEEPSEEK_API_BASE", DEFAULT_API_BASE),
+        model=setting("LLM_MODEL", "DEEPSEEK_MODEL", DEFAULT_MODEL).strip(),
         allowed_models=models,
         timeout=_positive_float(values.get("LLM_TIMEOUT", "60"), "LLM_TIMEOUT"),
         max_retries=_nonnegative_int(values.get("LLM_MAX_RETRIES", "1"), "LLM_MAX_RETRIES"),
@@ -127,6 +138,7 @@ def load_llm_config(environ: dict[str, str] | None = None) -> LLMConfig:
         max_concurrency=_positive_int(
             values.get("LLM_MAX_CONCURRENCY", "2"), "LLM_MAX_CONCURRENCY"
         ),
+        reasoning_effort=values.get("LLM_REASONING_EFFORT", "").strip() or None,
         auto_correct=values.get("LLM_AUTO_CORRECT", "false").strip().lower() == "true",
     )
     return validate_llm_config(config)

@@ -6,7 +6,7 @@ import csv
 import re
 import zipfile
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date, datetime
 from pathlib import Path
 from typing import Any
@@ -211,7 +211,10 @@ def _parse_weekly_matrix(
     data_rows = rows[preset.input.header_rows :]
     for row_number, row in enumerate(data_rows, start=preset.input.header_rows + 1):
         project = _value(row, mapping["project"])
-        progress = _value(row, week_column.index)
+        body_index = mapping.get("content", week_column.index)
+        if any(column.index == body_index for column in week_columns):
+            body_index = week_column.index
+        progress = _value(row, body_index)
         if not project:
             continue
         historical_completed = _should_mark_historical_completion(
@@ -230,6 +233,8 @@ def _parse_weekly_matrix(
             progress = completion_rule.output_text
             historical_completed_count += 1
         fields["progress"] = progress
+        if "content" in mapping:
+            fields["content"] = progress
         sources.append(
             SourceRecord(
                 source_id=_source_id("f1", sheet, row_number),
@@ -319,6 +324,7 @@ def parse_input(
     display_filename: str | None = None,
 ) -> ParsedInput:
     """Parse CSV/XLSX into normalized records according to a rule preset."""
+    sheet = sheet or preset.input.sheet_default
     if not path.is_file():
         raise FileNotFoundError(f"输入文件不存在：{path}")
     suffix = path.suffix.lower()
@@ -334,7 +340,7 @@ def parse_input(
         file_type = "xlsx"
     filename = display_filename or path.name
     if preset.input.layout == "weekly_matrix":
-        return _parse_weekly_matrix(
+        parsed = _parse_weekly_matrix(
             rows,
             preset,
             filename,
@@ -344,14 +350,42 @@ def parse_input(
             requested_week,
             field_mapping,
         )
-    return _parse_records(
-        rows,
-        preset,
-        filename,
-        file_type,
-        selected_sheet,
-        available_sheets,
-        field_mapping,
+    else:
+        parsed = _parse_records(
+            rows,
+            preset,
+            filename,
+            file_type,
+            selected_sheet,
+            available_sheets,
+            field_mapping,
+        )
+
+    if preset.input.expected_headers and parsed.headers != preset.input.expected_headers:
+        raise InputFormatError(
+            "表头结构与已确认方案不同，请进入方案适配重新分析、确认并保存新版本。"
+        )
+    policy = preset.input.status_policy
+    if not policy:
+        return parsed
+    include = {_normalized_status(value) for value in policy.get("include", [])}
+    known = {_normalized_status(value) for value in policy.get("known", [])}
+    kept, excluded, warnings = [], [], list(parsed.warnings)
+    for record in parsed.sources:
+        status = _normalized_status(record.fields.get("status", ""))
+        if status in known and status not in include:
+            excluded.append(record)
+            warnings.append(
+                f"第 {record.row_number} 行按已确认状态策略排除：{status}。原始记录保留供追溯。"
+            )
+        else:
+            kept.append(record)
+            if status not in known:
+                warnings.append(f"第 {record.row_number} 行状态未知或为空，已保留，需核对。")
+    if not kept:
+        raise InputFormatError("状态策略排除了所有记录，请调整方案后重试。")
+    return replace(
+        parsed, sources=tuple(kept), excluded_sources=tuple(excluded), warnings=tuple(warnings)
     )
 
 
@@ -362,6 +396,7 @@ def inspect_input_options(
     sheet: str | None = None,
 ) -> InputOptions:
     """Discover worksheet and weekly-column choices without building report content."""
+    sheet = sheet or preset.input.sheet_default
     if not path.is_file():
         raise FileNotFoundError(f"输入文件不存在：{path}")
     suffix = path.suffix.lower()

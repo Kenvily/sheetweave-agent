@@ -12,22 +12,21 @@ import tempfile
 import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from threading import Event, Lock, Thread
+from threading import Event, Thread
 
 from .generation import generate_snapshot
 from .llm import LLMClientError, LLMService, load_llm_config
 from .pdf_preview import PdfPreviewError, PdfPreviewService
-from .rules import load_rule_preset
 from .service import render_prepared_report
 from .stats import UsageStats
 from .task_queue import TaskCancelled, TaskQueue
-from .web_sessions import SessionConflictError, SnapshotStore
+from .web_sessions import SessionConflictError, SnapshotStore, session_preset
 
 LOGGER = logging.getLogger(__name__)
 
 
 class TaskRunner:
-    """Execute claimed tasks, coalescing streamed deltas before persistence."""
+    """Execute queued tasks and persist progress without streaming report content."""
 
     def __init__(
         self,
@@ -60,8 +59,6 @@ class TaskRunner:
         """Keep a lease while processing; never replay crashed external calls silently."""
         token = job["id"]
         stopped, lost = Event(), Event()
-        buffers, last = {}, {}
-        lock = Lock()
 
         def renew():
             while not stopped.wait(min(5, self.queue.lease_seconds / 3)):
@@ -78,24 +75,7 @@ class TaskRunner:
                 raise TaskCancelled()
             self.queue.emit(token, owner, kind, payload)
 
-        def flush():
-            for batch in list(buffers):
-                if buffers[batch]:
-                    emit("delta", {"batch": batch, "text": buffers[batch]})
-                    buffers[batch] = ""
-
-        def delta(batch, text):
-            with lock:
-                buffers[batch] = buffers.get(batch, "") + text
-                now = time.monotonic()
-                if len(buffers[batch]) >= 512 or now - last.get(batch, 0) >= 0.25:
-                    emit("delta", {"batch": batch, "text": buffers[batch]})
-                    buffers[batch] = ""
-                    last[batch] = now
-
         def publish():
-            with lock:
-                flush()
             if lost.is_set():
                 raise TaskCancelled()
             self.queue.begin_publish(token, owner)
@@ -106,14 +86,44 @@ class TaskRunner:
             emit("progress", {"message": "后台 Worker 已开始处理。"})
             options = job["payload"]
             directory = self.queue.directory(token)
-            if job["kind"] == "generate":
+            if job["kind"] == "adapt":
+                from .adaptation import assist_mapping
+                from .llm.client import OpenAICompatibleClient
+
+                service = self.llm_service
+                config = service.config if service else load_llm_config()
+                config.require_available()
+                client = (
+                    service._client
+                    if service and service._client is not None
+                    else OpenAICompatibleClient(config)
+                )
+                if options.get("mode") == "profile":
+                    import json
+
+                    from .adaptation import suggest_profile
+
+                    analysis = json.loads((directory / "analysis.json").read_text())
+                    result = suggest_profile(
+                        directory / options["input_name"],
+                        directory / "template.docx",
+                        analysis,
+                        client=client,
+                        model=config.model,
+                    )
+                    publish()
+                else:
+                    mapping = assist_mapping(options["table"], client=client, model=config.model)
+                    publish()
+                    result = {"mapping": mapping, "notice": "仅为待确认建议，未保存或改变方案。"}
+            elif job["kind"] == "generate":
                 snapshot = generate_snapshot(
                     directory / options["input_name"],
                     directory / "template.docx",
                     options,
                     self.snapshots,
                     llm_service=self.llm_service,
-                    on_delta=delta,
+                    on_delta=None,
                     progress=lambda message: emit("progress", {"message": message}),
                     before_publish=publish,
                 )
@@ -150,7 +160,7 @@ class TaskRunner:
                         output = work / "report.docx"
                         render_prepared_report(
                             prepared,
-                            load_rule_preset(session.preset_id),
+                            session_preset(session),
                             session.template_path,
                             output,
                             session.report_date,
@@ -172,6 +182,17 @@ class TaskRunner:
                             "block_id": options["block_id"],
                         }
             accepted = self.queue.finish(token, owner, result=result)
+            if (
+                accepted
+                and job["kind"] == "generate"
+                and options.get("preset", "").startswith("p_")
+            ):
+                try:
+                    from .profiles import ProfileStore
+
+                    ProfileStore.from_environment().used(options["preset"], successful=True)
+                except (OSError, ValueError, sqlite3.Error):
+                    LOGGER.warning("方案最后成功时间更新失败。")
             if accepted and job["kind"] == "generate" and self.stats:
                 try:
                     self.stats.record_generation(f"task:{token}")

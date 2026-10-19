@@ -9,7 +9,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def _client():
-    app = create_app(ROOT / "data/研发三部周报模板.docx")
+    app = create_app(ROOT / "data/研发三部周报模板-v2.docx")
     app.config["TESTING"] = True
     return app.test_client()
 
@@ -32,7 +32,7 @@ def test_root_post_compatibly_generates_instead_of_returning_405() -> None:
     response = _client().post(
         "/",
         data={
-            "csv_file": (io.BytesIO((ROOT / "data/周报.csv").read_bytes()), "周报.csv"),
+            "csv_file": (io.BytesIO((ROOT / "data/周报-v1.csv").read_bytes()), "周报.csv"),
             "week": "第1周",
             "report_date": "2026-09-24",
             "section_number": "9",
@@ -67,7 +67,7 @@ def test_web_generates_download_with_custom_section_number() -> None:
     response = _client().post(
         "/generate",
         data={
-            "csv_file": (io.BytesIO((ROOT / "data/周报.csv").read_bytes()), "周报.csv"),
+            "csv_file": (io.BytesIO((ROOT / "data/周报-v1.csv").read_bytes()), "周报.csv"),
             "week": "第1周",
             "report_date": "2026-09-24",
             "section_number": "12",
@@ -105,7 +105,7 @@ def test_web_rejects_invalid_section_number() -> None:
     response = _client().post(
         "/generate",
         data={
-            "csv_file": (io.BytesIO((ROOT / "data/周报.csv").read_bytes()), "周报.csv"),
+            "csv_file": (io.BytesIO((ROOT / "data/周报-v1.csv").read_bytes()), "周报.csv"),
             "report_date": "2026-09-24",
             "section_number": "0",
         },
@@ -124,19 +124,19 @@ def test_web_week_and_sheet_are_selects_and_section_is_text_input() -> None:
         assert f'<select name="{name}">' in response.text
     assert '<input type="text" name="section_number"' in response.text
     assert 'formaction="/generate"' in response.text
-    advanced = response.text.split('<details class="advanced-settings">', 1)[1].split(
-        "</details>", 1
-    )[0]
-    assert "高级适配设置" in advanced
-    assert 'name="section_number"' not in advanced
-    assert "自定义模板（可选）" in advanced
+    assert "高级适配设置" not in response.text
+    assert 'name="template_file"' not in response.text
+    assert 'name="field_project"' not in response.text
+    assert 'href="/profiles"' in response.text
+    assert "需要调整字段映射或文档模板" in response.text
+    assert '<option value="general"' not in response.text
 
 
 def test_input_options_discovers_rd3_weeks() -> None:
     response = _client().post(
         "/input-options",
         data={
-            "csv_file": (io.BytesIO((ROOT / "data/周报.csv").read_bytes()), "周报.csv"),
+            "csv_file": (io.BytesIO((ROOT / "data/周报-v1.csv").read_bytes()), "周报.csv"),
             "preset": "rd3",
         },
         content_type="multipart/form-data",

@@ -43,7 +43,7 @@ class BlockingClient:
         self.broken = broken
         self.calls = 0
 
-    def stream(self, messages, model):
+    def complete(self, messages, model):
         self.calls += 1
         blocks = json.loads(messages[-1]["content"])["blocks"]
         value = json.dumps(
@@ -54,12 +54,11 @@ class BlockingClient:
                 ]
             }
         )
-        yield value[:30]
         self.entered.set()
         assert self.release.wait(3)
         if self.broken:
             raise LLMClientError("合成连接错误")
-        yield value[30:]
+        return value
 
 
 def _app(tmp_path, client=None, pdf=None):
@@ -188,6 +187,7 @@ def test_queued_llm_does_not_block_home_or_poll_and_keeps_fact_fallback(tmp_path
     assert session.prepared.blocks[0].effective_version == "original"
     assert session.prepared.blocks[0].validation_level == "conflict"
     assert mock.calls == 1
+    assert not any(event["kind"] == "delta" for event in result["events"])
 
 
 @pytest.mark.parametrize("cancel", [False, True])

@@ -41,6 +41,11 @@ class OpenAICompatibleClient:
                 "messages": list(messages),
                 "temperature": 0.1,
                 "response_format": {"type": "json_object"},
+                **(
+                    {"reasoning_effort": self._config.reasoning_effort}
+                    if self._config.reasoning_effort
+                    else {}
+                ),
             },
             ensure_ascii=False,
         ).encode("utf-8")
@@ -93,6 +98,11 @@ class OpenAICompatibleClient:
                 "messages": list(messages),
                 "temperature": 0.1,
                 "response_format": {"type": "json_object"},
+                **(
+                    {"reasoning_effort": self._config.reasoning_effort}
+                    if self._config.reasoning_effort
+                    else {}
+                ),
                 "stream": True,
             },
             ensure_ascii=False,

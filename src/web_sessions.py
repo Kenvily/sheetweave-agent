@@ -159,11 +159,17 @@ class SnapshotStore:
         template_content: bytes,
         report_content: bytes,
         download_name: str,
+        rule_payload: dict | None = None,
     ) -> str:
         """Persist an editable IR, exact template, and first rendered document."""
         safe_name = self._safe_download_name(download_name)
         token, directory = self._new_directory()
         try:
+            if rule_payload is not None:
+                from .rules import validate_rule_preset
+
+                frozen = validate_rule_preset(rule_payload)
+                self._atomic_json(directory / f"{frozen.id}.json", rule_payload)
             self._write_private(directory / "template.docx", template_content)
             self._write_private(directory / "report-1.docx", report_content)
             self._atomic_json(
@@ -377,6 +383,10 @@ def _prepared_from_dict(payload: dict[str, Any]) -> PreparedReport:
         ),
         field_mapping=dict(source_data["field_mapping"]),
         headers=tuple(source_data["headers"]),
+        excluded_sources=tuple(
+            SourceRecord(**{**item, "raw_values": tuple(item.get("raw_values", ()))})
+            for item in source_data.get("excluded_sources", ())
+        ),
         warnings=tuple(source_data.get("warnings", ())),
         available_sheets=tuple(source_data.get("available_sheets", ())),
         month=source_data.get("month", ""),
@@ -387,6 +397,7 @@ def _prepared_from_dict(payload: dict[str, Any]) -> PreparedReport:
             **{
                 **item,
                 "source_ids": tuple(item["source_ids"]),
+                "source_fields": tuple(item.get("source_fields", ())),
                 "validation_warnings": tuple(item.get("validation_warnings", ())),
                 "edited_validation_warnings": tuple(item.get("edited_validation_warnings", ())),
             }
@@ -394,3 +405,13 @@ def _prepared_from_dict(payload: dict[str, Any]) -> PreparedReport:
         for item in payload["blocks"]
     )
     return PreparedReport(str(payload["preset_id"]), source, blocks)
+
+
+def session_preset(session: ReportSession):
+    """Load the frozen rule contract, falling back only for legacy sessions."""
+    from .rules import load_rule_preset
+
+    root = session.template_path.parent
+    if (root / f"{session.preset_id}.json").is_file():
+        return load_rule_preset(session.preset_id, root)
+    return load_rule_preset(session.preset_id)

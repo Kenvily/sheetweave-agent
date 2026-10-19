@@ -14,7 +14,7 @@ from weekly_report_agent.service import generate_report, prepare_report, process
 from weekly_report_agent.web import create_app
 
 ROOT = Path(__file__).resolve().parents[1]
-TEMPLATE = ROOT / "data/研发三部周报模板.docx"
+TEMPLATE = ROOT / "data/研发三部周报模板-v2.docx"
 
 
 def _matrix_csv(*rows: str) -> str:

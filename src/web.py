@@ -13,6 +13,7 @@ import sqlite3
 import tempfile
 import zipfile
 from collections.abc import Sequence
+from contextlib import nullcontext
 from datetime import date
 from pathlib import Path
 from xml.etree import ElementTree as ET
@@ -48,9 +49,11 @@ from .llm import (
 )
 from .llm.config import DEFAULT_MODEL, DEFAULT_MODELS
 from .normalizer import normalize_report_text
+from .numbering import renumber
 from .pdf_preview import PdfPreviewError, PdfPreviewService
-from .planner import build_body_paragraphs, validate_section_number
-from .rules import RulePreset, list_rule_presets, load_rule_preset
+from .planner import build_directory_plan, prepared_body_paragraphs, validate_section_number
+from .profiles import ProfileStore
+from .rules import RulePreset, list_rule_presets, load_rule_preset, preset_payload
 from .service import (
     edit_report_block,
     generate_report,
@@ -59,10 +62,11 @@ from .service import (
 )
 from .stats import UsageMetrics, UsageStats
 from .task_queue import QueueFullError, TaskQueue
-from .web_sessions import ReportSession, SessionConflictError, SnapshotStore
+from .web_profiles import profiles_ui
+from .web_sessions import ReportSession, SessionConflictError, SnapshotStore, session_preset
 from .web_stream import GenerationCancelled, stream_events
 
-DEFAULT_TEMPLATE = Path("data/研发三部周报模板.docx")
+DEFAULT_TEMPLATE = Path("data/研发三部周报模板-v2.docx")
 DOCX_MIME_TYPE = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
 MAX_UPLOAD_SIZE = 16 * 1024 * 1024
 DEFAULT_SECTION_NUMBER = 9
@@ -118,7 +122,7 @@ def _selected_mode() -> ContentMode:
 
 def _require_external_consent(mode: ContentMode) -> None:
     if mode is not ContentMode.ORIGINAL and request.form.get("allow_external") != "yes":
-        raise ValueError("使用模型处理前，请确认允许将内容块发送到已配置的 DeepSeek 服务。")
+        raise ValueError("使用模型处理前，请确认允许将内容块发送到已配置的模型服务。")
 
 
 def _parse_revision(value: str) -> int:
@@ -198,6 +202,7 @@ def create_app(
     pdf_preview_service: PdfPreviewService | None = None,
     usage_stats: UsageStats | None = None,
     task_queue: TaskQueue | None = None,
+    profile_store: ProfileStore | None = None,
 ) -> Flask:
     """Create and configure the weekly report web application."""
     app = Flask(__name__)
@@ -225,7 +230,31 @@ def create_app(
         PDF_PREVIEW_SERVICE=pdf_preview_service or PdfPreviewService.from_environment(),
         USAGE_STATS=configured_stats,
         TASK_QUEUE=task_queue or TaskQueue.from_environment(),
+        PROFILE_STORE=profile_store or ProfileStore.from_environment(),
+        ADAPTATION_ROOT=snapshot_root.with_name(snapshot_root.name + "-adaptations"),
     )
+
+    app.register_blueprint(profiles_ui)
+
+    def available_presets():
+        store = app.config["PROFILE_STORE"]
+        with store.locked():
+            return (
+                *(preset for preset in list_rule_presets() if preset.id != "general"),
+                *(store.load(item["id"])[0] for item in store.list()),
+            )
+
+    def selected_preset(preset_id):
+        if preset_id.startswith("p_"):
+            cached = getattr(g, "report_profile", None)
+            if cached and cached[0].id == preset_id:
+                return cached[0]
+            store = app.config["PROFILE_STORE"]
+            with nullcontext() if getattr(g, "profile_lock_held", False) else store.locked():
+                preset, template, metadata = store.load(preset_id)
+                g.report_profile = (preset, template.read_bytes(), metadata["version"])
+            return preset
+        return load_rule_preset(preset_id)
 
     def safe_metrics() -> UsageMetrics:
         service = app.config.get("USAGE_STATS")
@@ -318,9 +347,9 @@ def create_app(
                 "index.html",
                 error=error,
                 today=date.today().isoformat(),
-                form=request.form,
+                form=request.form if request.method == "POST" else request.args,
                 default_section_number=DEFAULT_SECTION_NUMBER,
-                presets=list_rule_presets(),
+                presets=available_presets(),
                 prepared=prepared,
                 selected_preset=selected_preset,
                 snapshot_token=snapshot_token,
@@ -350,19 +379,43 @@ def create_app(
         status: int = 200,
     ):
         models, default_model, llm_available = llm_page_settings()
-        preset = load_rule_preset(session.preset_id)
+        preset = session_preset(session)
         notices = {
             "edited": "人工编辑已确认并生效，文档预览与下载文件已同步更新。",
             "selected": "有效内容版本已更新，文档预览与下载文件已同步更新。",
             "regenerated": "所选内容块已重新生成，其他内容未改变。",
             "pdf": "当前版本的 PDF 版式预览已生成。",
         }
+        directory_preview = []
+        if any(section.heading_path for section in preset.sections):
+            plan = renumber(
+                build_directory_plan(
+                    session.prepared, preset, session.report_date, session.section_number
+                ),
+                preset.document.numbering,
+            )
+            for paragraph in plan.paragraphs[2:]:
+                if paragraph.block_id:
+                    if (
+                        directory_preview
+                        and directory_preview[-1].get("block_id") == paragraph.block_id
+                    ):
+                        directory_preview[-1]["paragraphs"].append(paragraph)
+                    else:
+                        directory_preview.append(
+                            {"block_id": paragraph.block_id, "paragraphs": [paragraph]}
+                        )
+                else:
+                    directory_preview.append(
+                        {"text": paragraph.text, "level": int(paragraph.kind.value[-1])}
+                    )
         return (
             render_template(
                 "workspace.html",
                 session=session,
                 prepared=session.prepared,
                 preset=preset,
+                directory_preview=directory_preview,
                 error=error,
                 notice=notices.get(notice, notice),
                 unified_diff=_unified_diff,
@@ -379,13 +432,10 @@ def create_app(
                 llm_available=llm_available,
                 pdf_available=app.config["PDF_PREVIEW_SERVICE"].available,
                 rendered_blocks={
-                    block.block_id: "\n".join(
-                        paragraph.text
-                        for paragraph in build_body_paragraphs(
-                            block.effective_text, session.report_date
-                        )
-                    )
-                    for block in session.prepared.blocks
+                    key: "\n".join(p.text for p in paragraphs)
+                    for key, paragraphs in prepared_body_paragraphs(
+                        session.prepared, preset, session.report_date
+                    ).items()
                 },
                 normalize_text=lambda text: normalize_report_text(text, session.report_date),
             ),
@@ -400,7 +450,7 @@ def create_app(
         custom_instruction: str | None = None,
         model: str | None = None,
     ) -> ReportSession:
-        preset = load_rule_preset(session.preset_id)
+        preset = session_preset(session)
         with tempfile.TemporaryDirectory(prefix="weekly-report-revision-") as directory:
             output_path = Path(directory) / "report.docx"
             render_prepared_report(
@@ -447,6 +497,15 @@ def create_app(
         return input_path
 
     def selected_template(workdir: Path) -> Path:
+        selected_id = request.form.get("preset", "rd3")
+        if selected_id.startswith("p_"):
+            if request.files.get("template_file") and request.files["template_file"].filename:
+                raise ValueError("已保存方案的模板不可临时替换，请到方案适配保存新版本。")
+            selected_preset(selected_id)
+            path = workdir / "template.docx"
+            path.write_bytes(g.report_profile[1])
+            path.chmod(0o600)
+            return path
         template_upload = request.files.get("template_file")
         if template_upload is None or not template_upload.filename:
             return Path(app.config["REPORT_TEMPLATE_PATH"])
@@ -484,7 +543,7 @@ def create_app(
         try:
             if upload is None:
                 raise ValueError("请选择周报 CSV 或 XLSX 文件。")
-            preset = load_rule_preset(request.form.get("preset", "rd3"))
+            preset = selected_preset(request.form.get("preset", "rd3"))
             with tempfile.TemporaryDirectory(prefix="weekly-report-options-") as directory:
                 input_path = save_input(upload, Path(directory))
                 options = inspect_input_options(
@@ -508,10 +567,12 @@ def create_app(
         return redirect(url_for("index"))
 
     def generation_options(upload):
-        preset = load_rule_preset(request.form.get("preset", "rd3"))
+        preset = selected_preset(request.form.get("preset", "rd3"))
         mode, instruction, model = process_options()
         return {
             "preset": preset.id,
+            "preset_payload": preset_payload(preset),
+            "profile_version": g.report_profile[2] if preset.id.startswith("p_") else None,
             "report_date": _parse_date(request.form.get("report_date", "")).isoformat(),
             "section_number": _parse_section_number(request.form.get("section_number", ""), preset),
             "content_mode": mode.value,
@@ -562,6 +623,14 @@ def create_app(
 
     @app.post("/tasks")
     def submit_generation_task():
+        with app.config["PROFILE_STORE"].locked():
+            g.profile_lock_held = True
+            try:
+                return enqueue_generation_task()
+            finally:
+                g.profile_lock_held = False
+
+    def enqueue_generation_task():
         """Persist uploads and enqueue work; never call the model in a Web thread."""
         directory = None
         try:
@@ -584,7 +653,13 @@ def create_app(
                 shutil.copyfile(template, destination)
             destination.chmod(0o600)
             options["input_name"] = source.name
-            return task_submission("generate", options, token, directory)
+            response = task_submission("generate", options, token, directory)
+            if options["preset"].startswith("p_"):
+                try:
+                    app.config["PROFILE_STORE"].used(options["preset"])
+                except (OSError, sqlite3.Error):
+                    app.logger.warning("任务已入队，方案最近使用时间更新失败。")
+            return response
         except (OSError, ValueError, LLMClientError, zipfile.BadZipFile) as exc:
             if directory:
                 shutil.rmtree(directory, ignore_errors=True)
@@ -605,6 +680,7 @@ def create_app(
                 raise ValueError("内容块不存在或不支持模型处理。")
             payload = {
                 "token": token,
+                "preset": session.preset_id,
                 "revision": session.revision,
                 "block_id": block_id,
                 "content_mode": mode.value,
@@ -627,7 +703,10 @@ def create_app(
                 raise ValueError("当前环境未安装 LibreOffice，PDF 版式预览不可用。")
             task, directory = app.config["TASK_QUEUE"].new_directory()
             return task_submission(
-                "pdf", {"token": token, "revision": session.revision}, task, directory
+                "pdf",
+                {"token": token, "revision": session.revision, "preset": session.preset_id},
+                task,
+                directory,
             )
         except (ValueError, OSError) as exc:
             return jsonify(error=str(exc)), 429 if isinstance(
@@ -638,7 +717,7 @@ def create_app(
     def task_status(token):
         try:
             result = app.config["TASK_QUEUE"].status(token, int(request.args.get("after", "0")))
-            if result["result"]:
+            if result["result"] and "token" in result["result"]:
                 outcome = result["result"]
                 outcome["url"] = url_for(
                     "workspace", token=outcome["token"], updated=outcome.get("updated")
@@ -731,16 +810,21 @@ def create_app(
         """Compare a human draft with current output without modifying the session."""
         try:
             session = current_session(token)
-            block = session.prepared.block_by_id(block_id)
+            session.prepared.block_by_id(block_id)
             draft = request.form.get("edited_text", "").strip()
             if not draft:
                 raise ValueError("人工编辑内容不能为空。")
+            preset = session_preset(session)
             before = "\n".join(
                 item.text
-                for item in build_body_paragraphs(block.effective_text, session.report_date)
+                for item in prepared_body_paragraphs(session.prepared, preset, session.report_date)[
+                    block_id
+                ]
             )
+            edited = edit_report_block(session.prepared, block_id, draft)
             after = "\n".join(
-                item.text for item in build_body_paragraphs(draft, session.report_date)
+                item.text
+                for item in prepared_body_paragraphs(edited, preset, session.report_date)[block_id]
             )
             response = jsonify(
                 before=before,
@@ -898,7 +982,7 @@ def create_app(
         try:
             if upload is None:
                 raise ValueError("请选择周报 CSV 或 XLSX 文件。")
-            preset = load_rule_preset(request.form.get("preset", "rd3"))
+            preset = selected_preset(request.form.get("preset", "rd3"))
             report_date = _parse_date(request.form.get("report_date", ""))
             section_number = _parse_section_number(request.form.get("section_number", ""), preset)
             mode, instruction, model = process_options()
@@ -915,6 +999,7 @@ def create_app(
                     requested_week=request.form.get("week", "").strip() or None,
                     section_number=section_number,
                     preset_id=preset.id,
+                    preset=preset,
                     sheet=request.form.get("sheet", "").strip() or None,
                     field_mapping=_field_mapping(),
                     display_filename=upload.filename,

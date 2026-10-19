@@ -29,12 +29,13 @@
             <input type="file" name="csv_file" accept=".csv,.xlsx,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" required>
           </label>
           <label class="field">
-            <span>周报规则</span>
+            <span>周报规则 / 已保存方案</span>
             <select name="preset" required>
               {% for preset in presets %}
               <option value="{{ preset.id }}"{% if form.get('preset', 'rd3') == preset.id %} selected{% endif %}>{{ preset.name }}</option>
               {% endfor %}
             </select>
+            <small>需要调整字段映射或文档模板？前往<a href="{{ url_for('profiles.library') }}">方案适配</a>，试生成并保存后在此选用。</small>
           </label>
         </div>
 
@@ -94,24 +95,6 @@
 
         <p class="mode-hint" id="mode-hint" role="status">原文模式只进行术语规范化与排版，无需调用模型。</p>
         </fieldset>
-        <details class="advanced-settings">
-          <summary>高级适配设置</summary>
-          <div class="advanced-grid">
-            <label class="field">
-              <span>自定义模板（可选）</span>
-              <input type="file" name="template_file" accept=".docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document">
-            </label>
-          </div>
-          <div class="mapping-grid">
-            {% for key, label in [('project', '项目'), ('detail', '具体内容'), ('status', '状态'), ('content', '本周工作'), ('issues', '问题与风险'), ('next_plan', '下周计划')] %}
-            <label class="field compact">
-              <span>{{ label }}列</span>
-              <input type="text" name="field_{{ key }}" value="{{ form.get('field_' ~ key, '') }}" placeholder="自动识别">
-            </label>
-            {% endfor %}
-          </div>
-        </details>
-
         <div class="actions">
           <span class="action-hint">建议先审核，再下载正式文件。</span>
           <button class="secondary" type="submit" formaction="{{ url_for('generate') }}">直接下载 DOCX</button>
@@ -122,14 +105,14 @@
 
     <aside class="creation-guide" aria-label="生成前提示">
       <section class="guide-card"><span class="eyebrow">本次报告</span><h2>让内容先说清楚</h2><p>原文保留、润色或精简，都可在审核页逐块调整。</p><dl class="generation-summary"><div><dt>规则</dt><dd id="summary-preset">—</dd></div><div><dt>整理方式</dt><dd id="summary-mode">—</dd></div><div><dt>报告日期</dt><dd id="summary-date">—</dd></div></dl></section>
-      <section class="guide-card"><h2>先试一份示例</h2><p>初次使用可下载通用格式示例，选择“通用周报”体验完整流程。</p><div class="example-links"><a href="{{ url_for('download_example', filename='general-weekly.csv') }}">示例 CSV ↗</a><a href="{{ url_for('download_example', filename='general-weekly.xlsx') }}">示例 XLSX ↗</a></div></section>
+      <section class="guide-card"><h2>先试一份示例</h2><p>初次使用可下载示例，在<a href="{{ url_for('profiles.library') }}">方案适配</a>中分析、试生成并保存，再回到此处选用。</p><div class="example-links"><a href="{{ url_for('download_example', filename='general-weekly.csv') }}">示例 CSV ↗</a><a href="{{ url_for('download_example', filename='general-weekly.xlsx') }}">示例 XLSX ↗</a></div></section>
       <p class="guide-note">{% if llm_available %}模型服务已配置，可按需选择整理模式。{% else %}模型服务尚未配置，原文模式可正常使用。{% endif %}<br>审核会话保留 2 小时，请及时下载。</p>
     </aside>
     </div>
     <section class="usage-stats" aria-label="匿名使用统计">
       <article><strong>{{ usage_metrics.total_generations }}</strong><span>累计成功生成</span></article>
       <article><strong>{{ usage_metrics.weekly_generations }}</strong><span>本周成功生成</span></article>
-      <article><strong>{{ usage_metrics.estimated_visitors }}</strong><span>独立访客（估算）</span></article>
+      <article><strong>{{ usage_metrics.estimated_visitors }}</strong><span>访客</span></article>
       <article><strong>{{ usage_metrics.page_views }}</strong><span>访问次数</span></article>
     </section>
     {% if not stats_available %}<p role="status">统计暂不可用，请检查服务端统计存储配置。</p>{% endif %}
@@ -216,10 +199,7 @@
       <span class="spinner" aria-hidden="true"></span>
       <strong id="processing-title">正在处理周报</strong>
       <p id="processing-message" role="status" aria-live="polite">请保持页面打开，完成后会自动显示结果。</p>
-      <div id="stream-candidates" class="stream-candidates" hidden>
-        <p>生成中的临时候选 · 尚未校验，不代表最终导出内容</p>
-        <div data-stream-batches></div>
-      </div>
+
       <button type="button" class="secondary" id="cancel-generation" hidden>取消生成</button>
     </div>
   </div>
@@ -240,6 +220,15 @@
       const customInstruction = form?.elements.custom_instruction;
       const optionsStatus = document.getElementById("input-options-status");
       if (!form || !overlay) return;
+      try {
+        const remembered = localStorage.getItem("weekly-report-profile");
+        if (!new URLSearchParams(location.search).has("preset") && {{ (request.method != 'POST')|tojson }}
+            && [...preset.options].some(option => option.value === remembered)) preset.value = remembered;
+        preset.addEventListener("change", () => {
+          try { localStorage.setItem("weekly-report-profile", preset.value); } catch (_) { /* optional preference */ }
+        });
+        localStorage.setItem("weekly-report-profile", preset.value);
+      } catch (_) { /* Browser storage is optional, never identity. */ }
 
       const updateCustomInstruction = () => {
         const isCustom = contentMode.value === "custom";
@@ -369,8 +358,6 @@
       };
 
       let generationController;
-      const streamCandidates = document.getElementById("stream-candidates");
-      const streamBatches = streamCandidates.querySelector("[data-stream-batches]");
       const cancelGeneration = document.getElementById("cancel-generation");
       cancelGeneration.addEventListener("click", () => generationController?.abort());
       overlay.addEventListener("keydown", (event) => {
@@ -383,9 +370,7 @@
         title.textContent = isPreview ? "正在生成预览" : "正在生成 DOCX";
         message.textContent = mode === "original"
           ? "正在解析数据并应用排版规则，请稍候。"
-          : "正在连接模型，收到内容后会逐步显示。";
-        streamBatches.replaceChildren();
-        streamCandidates.hidden = true;
+          : "正在整理报告，完成后进入审核页面。";
         generationController = new AbortController();
         cancelGeneration.hidden = false;
         setProcessing(true);
@@ -394,25 +379,10 @@
             ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
         };
         try {
-          const batchElements = new Map();
           await window.runQueuedReport({
               form, url: form.dataset.taskUrl, signal: generationController.signal,
               intent: isPreview ? "preview" : "download", resume,
               onProgress: (text) => { message.textContent = text; },
-              onBatch: (batch, text) => {
-                let element = batchElements.get(batch);
-                if (!element) {
-                  const section = document.createElement("section");
-                  const heading = document.createElement("strong");
-                  heading.textContent = `候选内容 ${batch}`;
-                  element = document.createElement("pre");
-                  section.append(heading, element);
-                  streamBatches.append(section);
-                  batchElements.set(batch, element);
-                }
-                element.textContent = text;
-                streamCandidates.hidden = false;
-              },
               onComplete: async (payload) => {
                 if (payload.intent === "preview") window.location.assign(payload.url);
                 else {

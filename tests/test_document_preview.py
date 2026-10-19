@@ -15,7 +15,7 @@ from weekly_report_agent.web import DOCX_MIME_TYPE, create_app
 from weekly_report_agent.web_sessions import SessionConflictError, SnapshotStore
 
 ROOT = Path(__file__).resolve().parents[1]
-TEMPLATE = ROOT / "data/研发三部周报模板.docx"
+TEMPLATE = ROOT / "data/研发三部周报模板-v2.docx"
 SIMPLE_CSV = "项目,本周工作\n项目甲,完成模型验证，AUC 0.81\n".encode()
 
 

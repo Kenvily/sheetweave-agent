@@ -203,6 +203,17 @@
           <article class="paper-preview">
             <h2>{{ preset.document.report_title }}</h2>
             <p class="preview-date">{{ session.report_date.strftime('%Y%m%d') }}</p>
+            {% if directory_preview %}
+            {% for item in directory_preview %}
+              {% if item.block_id %}
+              <div class="preview-entry" tabindex="0" data-preview-block="{{ item.block_id }}" aria-label="定位此段的来源和审核内容">
+                {% for paragraph in item.paragraphs %}<p>{{ paragraph.text }}</p>{% endfor %}
+              </div>
+              {% elif item.level == 1 %}<h3>{{ item.text }}</h3>
+              {% elif item.level == 2 %}<h4>{{ item.text }}</h4>
+              {% else %}<h5>{{ item.text }}</h5>{% endif %}
+            {% endfor %}
+            {% else %}
             {% for section in preset.sections %}
               {% set section_blocks = prepared.blocks|selectattr('section_id', 'equalto', section.id)|list %}
               {% if section_blocks %}
@@ -217,6 +228,7 @@
               </section>
               {% endif %}
             {% endfor %}
+            {% endif %}
           </article>
         </div>
         {% if session.pdf_path %}

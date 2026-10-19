@@ -8,9 +8,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from xml.etree import ElementTree as ET
 
-from .docx_renderer import BODY_KINDS, DOCUMENT_PART, FONT_SETTINGS, HEADING_KINDS, WORD_NS
+from .document_style import paragraph_style
+from .docx_renderer import BODY_KINDS, DOCUMENT_PART, HEADING_KINDS, STYLES_PART, WORD_NS
 from .docx_security import DocxSecurityError, inspect_docx_package
-from .models import ParagraphKind
+from .models import ParagraphKind, ReportPlan
+from .numbering import validate_numbering
 from .planner import CIRCLED_NUMBERS, validate_section_number
 
 INFORMAL_NAME_PATTERN = re.compile(r"(?:[A-Za-z]{1,20}|[\u4e00-\u9fff]{1,3})[哥姐]")
@@ -38,34 +40,44 @@ def _text(paragraph: ET.Element) -> str:
     return "".join(node.text or "" for node in paragraph.iter(_qn("t")))
 
 
-def _require_style(paragraph: ET.Element, kind: ParagraphKind) -> None:
+def _require_style(paragraph: ET.Element, kind: ParagraphKind, styles: dict | None = None) -> None:
     text = _text(paragraph)
-    run_properties = paragraph.find(f"{_qn('r')}/{_qn('rPr')}")
-    paragraph_properties = paragraph.find(_qn("pPr"))
-    if run_properties is None or paragraph_properties is None:
+    style = paragraph_style(kind, styles)
+    properties = paragraph.find(_qn("pPr"))
+    runs = [run for run in paragraph.iter(_qn("r")) if _text(run)]
+    if properties is None or not runs:
         raise ReportValidationError(f"段落缺少格式属性：{text}")
-
-    font, size, bold = FONT_SETTINGS[kind]
-    fonts = run_properties.find(_qn("rFonts"))
-    size_node = run_properties.find(_qn("sz"))
-    if fonts is None or fonts.get(_qn("ascii")) != font:
-        raise ReportValidationError(f"段落字体不正确：{text}")
-    if size_node is None or size_node.get(_qn("val")) != size:
-        raise ReportValidationError(f"段落字号不正确：{text}")
-    if bold and run_properties.find(_qn("b")) is None:
-        raise ReportValidationError(f"标题未加粗：{text}")
-
-    spacing = paragraph_properties.find(_qn("spacing"))
-    if spacing is None or spacing.get(_qn("line")) != "360":
-        raise ReportValidationError(f"段落不是 1.5 倍行距：{text}")
-    if kind in HEADING_KINDS and (
-        spacing.get(_qn("before")) != "120" or spacing.get(_qn("after")) != "120"
+    for run in runs:
+        props = run.find(_qn("rPr"))
+        fonts = props.find(_qn("rFonts")) if props is not None else None
+        size = props.find(_qn("sz")) if props is not None else None
+        east_asia = {"Microsoft YaHei": "微软雅黑", "SimSun": "宋体"}.get(style.font, style.font)
+        if fonts is None or any(
+            fonts.get(_qn(key)) != value
+            for key, value in (
+                ("ascii", style.font),
+                ("hAnsi", style.font),
+                ("eastAsia", east_asia),
+            )
+        ):
+            raise ReportValidationError(f"段落字体不正确：{text}")
+        if size is None or size.get(_qn("val")) != str(round(style.size_pt * 2)):
+            raise ReportValidationError(f"段落字号不正确：{text}")
+        bold = props.find(_qn("b"))
+        actual_bold = bold is not None and bold.get(_qn("val"), "1") not in {"0", "false", "off"}
+        if style.bold is not None and actual_bold != style.bold:
+            raise ReportValidationError(f"段落加粗不正确：{text}")
+    spacing = properties.find(_qn("spacing"))
+    if spacing is None or any(
+        spacing.get(_qn(key), "0") != value for key, value in style.attributes().items()
     ):
-        raise ReportValidationError(f"标题段前段后间距不正确：{text}")
-    if kind in BODY_KINDS:
-        indent = paragraph_properties.find(_qn("ind"))
-        if indent is None or indent.get(_qn("firstLineChars")) != "200":
-            raise ReportValidationError(f"正文未首行缩进 2 字符：{text}")
+        raise ReportValidationError(f"段落行距或间距不正确：{text}")
+    if kind in BODY_KINDS or style.first_line_chars:
+        indent = properties.find(_qn("ind"))
+        if indent is None or indent.get(_qn("firstLineChars")) != str(
+            round(style.first_line_chars * 100)
+        ):
+            raise ReportValidationError(f"正文首行缩进不正确：{text}")
 
 
 def _paragraph_kind(text: str, report_title: str, expected_headings: set[str]) -> ParagraphKind:
@@ -86,6 +98,28 @@ def _paragraph_kind(text: str, report_title: str, expected_headings: set[str]) -
     if text.startswith(tuple(CIRCLED_NUMBERS)):
         return ParagraphKind.BODY_3
     raise ReportValidationError(f"正文编号格式不正确：{text}")
+
+
+def _require_outline(paragraph: ET.Element, kind: ParagraphKind, definitions: dict) -> None:
+    """Require real heading semantics, not merely heading-like typography."""
+    properties = paragraph.find(_qn("pPr"))
+    outline = properties.find(_qn("outlineLvl")) if properties is not None else None
+    expected = str(int(kind.value.rsplit("_", 1)[1]) - 1) if kind in HEADING_KINDS else "9"
+    if outline is None or outline.get(_qn("val")) != expected:
+        raise ReportValidationError(f"段落大纲级别不正确：{_text(paragraph)}")
+    if kind in HEADING_KINDS:
+        reference = properties.find(_qn("pStyle"))
+        definition = definitions.get(reference.get(_qn("val"))) if reference is not None else None
+        style_outline = (
+            definition.find(f"{_qn('pPr')}/{_qn('outlineLvl')}") if definition is not None else None
+        )
+        if (
+            definition is None
+            or definition.get(_qn("type")) != "paragraph"
+            or style_outline is None
+            or style_outline.get(_qn("val")) != expected
+        ):
+            raise ReportValidationError(f"标题缺少有效的段落标题样式：{_text(paragraph)}")
 
 
 def _require_wording(text: str, kind: ParagraphKind) -> None:
@@ -129,11 +163,13 @@ def _require_numbering_sequence(texts: list[str], section_number: int) -> None:
             if int(heading_2.group(2)) != heading_2_index:
                 raise ReportValidationError(f"二级标题编号不连续：{text}")
             heading_3_index = 0
+            body_1_index = body_2_index = body_3_index = 0
         elif heading_1:
             heading_1_index += 1
             if int(heading_1.group(1)) != heading_1_index:
                 raise ReportValidationError(f"一级标题编号不连续：{text}")
             heading_2_index = heading_3_index = 0
+            body_1_index = body_2_index = body_3_index = 0
         elif body_1:
             body_1_index += 1
             if int(body_1.group(1)) != body_1_index:
@@ -193,6 +229,9 @@ def validate_report(
     *,
     report_title: str = "数据科学产品部周报",
     heading_titles: tuple[str, ...] = ("大模型产品研发",),
+    styles: dict | None = None,
+    numbering: dict | None = None,
+    expected_plan: ReportPlan | None = None,
 ) -> ValidationResult:
     """Validate a readable DOCX against configured report formatting rules."""
     section_number = validate_section_number(section_number)
@@ -209,6 +248,7 @@ def validate_report(
             if DOCUMENT_PART not in package.namelist():
                 raise ReportValidationError("DOCX 缺少 word/document.xml。")
             root = ET.fromstring(package.read(DOCUMENT_PART))
+            style_root = ET.fromstring(package.read(STYLES_PART))
     except (zipfile.BadZipFile, ET.ParseError) as exc:
         raise ReportValidationError(f"DOCX 文件无效：{exc}") from exc
 
@@ -218,17 +258,32 @@ def validate_report(
     expected_headings = {
         f"{section_number + offset}. {title}" for offset, title in enumerate(heading_titles)
     }
+    if expected_plan is not None:
+        if texts != [p.text for p in expected_plan.paragraphs]:
+            raise ReportValidationError("导出正文与已确认报告计划不一致。")
+        expected_headings = {
+            p.text for p in expected_plan.paragraphs if p.kind is ParagraphKind.HEADING_1
+        }
     missing_headings = expected_headings.difference(texts)
     if missing_headings:
         missing = "、".join(sorted(missing_headings))
         raise ReportValidationError(f"报告缺少一级标题：{missing}。")
 
-    _require_numbering_sequence(texts, section_number)
+    if validate_numbering(numbering) == validate_numbering():
+        _require_numbering_sequence(texts, section_number)
+    elif expected_plan is None:
+        raise ReportValidationError("自定义编号校验需要报告计划。")
 
     heading_count = 0
-    for paragraph, text in zip(paragraphs, texts, strict=True):
-        kind = _paragraph_kind(text, report_title, expected_headings)
-        _require_style(paragraph, kind)
+    definitions = {node.get(_qn("styleId")): node for node in style_root.findall(_qn("style"))}
+    for index, (paragraph, text) in enumerate(zip(paragraphs, texts, strict=True)):
+        kind = (
+            expected_plan.paragraphs[index].kind
+            if expected_plan is not None
+            else _paragraph_kind(text, report_title, expected_headings)
+        )
+        _require_style(paragraph, kind, styles)
+        _require_outline(paragraph, kind, definitions)
         _require_wording(text, kind)
         if kind in HEADING_KINDS:
             heading_count += 1

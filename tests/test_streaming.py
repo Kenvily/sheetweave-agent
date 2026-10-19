@@ -177,7 +177,7 @@ def test_original_stream_is_offline(tmp_path) -> None:
     form = _form()
     form["content_mode"] = "original"
     form["template_file"] = (
-        io.BytesIO(Path("data/研发三部周报模板.docx").read_bytes()),
+        io.BytesIO(Path("data/研发三部周报模板-v2.docx").read_bytes()),
         "synthetic-template.docx",
     )
     response = app.test_client().post("/preview-stream", data=form)

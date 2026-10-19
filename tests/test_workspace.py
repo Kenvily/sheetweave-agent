@@ -12,7 +12,7 @@ from weekly_report_agent.web import DOCX_MIME_TYPE, _inline_diff, _unified_diff,
 from weekly_report_agent.web_sessions import SnapshotStore
 
 ROOT = Path(__file__).resolve().parents[1]
-TEMPLATE = ROOT / "data/研发三部周报模板.docx"
+TEMPLATE = ROOT / "data/研发三部周报模板-v2.docx"
 MULTI_SOURCE_CSV = (
     "项目,本周工作,问题与风险,下周计划\n"
     "项目甲,完成模型验证，AUC 0.81,样本偏少,补充样本\n"
