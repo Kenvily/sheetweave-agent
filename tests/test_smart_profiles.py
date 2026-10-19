@@ -383,7 +383,7 @@ def test_merged_source_lists_restart_as_siblings_not_nested_items(tmp_path):
         prepared, preset, TEMPLATE, tmp_path / "lists.docx", date(2026, 10, 16)
     )
     top = [p.text for p in plan.paragraphs if p.kind is ParagraphKind.BODY_1]
-    assert top == ["1、完成AUC 0.81验证：", "2、完成72.5%验证："]
+    assert top == ["1、完成AUC 0.81验证。", "2、模型v2。", "3、完成72.5%验证。", "4、评估报告。"]
 
 
 def test_model_automatically_proposes_titles_and_merges_rows_per_heading(tmp_path):

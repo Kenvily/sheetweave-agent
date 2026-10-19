@@ -178,3 +178,51 @@ def test_conflicting_candidate_is_explained_and_excluded_from_snapshot(tmp_path:
     assert "AUC 0.81" in document
     assert "AUC 0.91" not in document
     assert fake.calls == 1
+
+
+@pytest.mark.parametrize("route", ["/preview", "/tasks"])
+def test_polish_extra_requirements_reach_generation_and_regeneration(tmp_path, route):
+    from weekly_report_agent.task_worker import TaskRunner
+
+    class CapturingClient(WebFakeClient):
+        def __init__(self):
+            super().__init__()
+            self.requests = []
+
+        def complete(self, messages, model):
+            self.requests.append(json.loads(messages[-1]["content"]))
+            return super().complete(messages, model)
+
+    fake = CapturingClient()
+    client = _client(fake, tmp_path)
+    app = client.application
+    form = _form()
+    form["custom_instruction"] = "按成果分条整理"
+    response = client.post(route, data=form)
+    queue = app.config["TASK_QUEUE"]
+    runner = TaskRunner(queue, app.config["SNAPSHOT_STORE"], llm_service=app.config["LLM_SERVICE"])
+    if route == "/tasks":
+        assert response.status_code == 202
+        job = queue.claim("initial")
+        runner.run(job, "initial")
+        token = queue.status(job["id"])["result"]["token"]
+    else:
+        assert response.status_code == 200
+        import re
+
+        token = re.search(r'href="/download/([^"/]+)"', response.text).group(1)
+    assert fake.requests[0]["mode_contract"]["custom_instruction"] == "按成果分条整理"
+    session = app.config["SNAPSHOT_STORE"].load_session(token)
+    block_id = next(block.block_id for block in session.prepared.blocks if block.llm_editable)
+    response = client.post(
+        f"/workspace/{token}/blocks/{block_id}/tasks",
+        data={
+            "content_mode": "polish",
+            "custom_instruction": "先写结论",
+            "revision": session.revision,
+            "allow_external": "yes",
+        },
+    )
+    assert response.status_code == 202
+    runner.run(queue.claim("regenerate"), "regenerate")
+    assert fake.requests[-1]["mode_contract"]["custom_instruction"] == "先写结论"

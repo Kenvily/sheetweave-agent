@@ -43,17 +43,17 @@ def test_changed_or_misattributed_fact_is_conflict(
     assert all(issue.original_excerpt and issue.generated_excerpt for issue in result.issues)
 
 
-def test_concise_can_omit_noncritical_detail_but_not_metric_or_status() -> None:
+def test_polish_requires_details_metrics_and_status() -> None:
     optional = validate_generated_text(
-        "10月12日完成1000条样本整理并使用LightGBM", "完成样本整理", "concise"
+        "10月12日完成1000条样本整理并使用LightGBM", "完成样本整理", "polish"
     )
-    metric = validate_generated_text("AUC 0.81验证已完成", "验证已完成", "concise")
+    metric = validate_generated_text("AUC 0.81验证已完成", "验证已完成", "polish")
 
-    assert optional.level is ValidationLevel.REVIEW
+    assert optional.level is ValidationLevel.CONFLICT
     assert metric.level is ValidationLevel.CONFLICT
 
 
-@pytest.mark.parametrize("mode", ["polish", "expand", "custom"])
+@pytest.mark.parametrize("mode", ["polish"])
 def test_non_concise_modes_require_all_source_facts(mode: str) -> None:
     result = validate_generated_text("10月12日完成1000条样本整理", "完成样本整理", mode)
 
@@ -64,4 +64,23 @@ def test_multi_record_summary_may_merge_duplicate_facts_and_derive_count() -> No
     original = "TabPFN相关性0.9\nTabPFN相关性0.9"
     generated = "两项与TabPFN的相关性均为0.9"
 
-    assert validate_generated_text(original, generated, "concise").level is ValidationLevel.PASS
+    assert validate_generated_text(original, generated, "polish").level is ValidationLevel.PASS
+
+
+@pytest.mark.parametrize(
+    "original,generated",
+    [
+        ("使用LightGBM进行验证。", "进行验证。"),
+        ("编号5090的环境。", "相关环境。"),
+    ],
+)
+def test_polish_advisory_difference_does_not_trigger_strict_fallback(original, generated):
+    relaxed = validate_generated_text(original, generated, "polish")
+    strict = validate_generated_text(original, generated, "original")
+    assert relaxed.level is ValidationLevel.REVIEW and relaxed.accepted
+    assert strict.level is ValidationLevel.CONFLICT and not strict.accepted
+
+
+def test_polish_critical_conflict_overrides_advisory_omission():
+    result = validate_generated_text("LightGBM，AUC 0.81。", "AUC 0.91。", "polish")
+    assert result.level is ValidationLevel.CONFLICT and not result.accepted

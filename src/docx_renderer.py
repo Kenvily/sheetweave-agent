@@ -12,6 +12,7 @@ from xml.etree import ElementTree as ET
 from .document_style import default_styles, paragraph_style
 from .docx_security import inspect_docx_package
 from .models import ParagraphKind, ReportParagraph, ReportPlan
+from .word_lists import REL_NS, build_lists, numbering_part, serialize, wire_numbering
 
 WORD_NS = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
 XML_NS = "http://www.w3.org/XML/1998/namespace"
@@ -50,45 +51,54 @@ def _paragraph_element(
     paragraph: ReportParagraph,
     styles: dict | None = None,
     heading_styles: dict[ParagraphKind, str] | None = None,
+    native_list: tuple[str, int, str, str] | None = None,
 ) -> ET.Element:
     node = ET.Element(_qn("p"))
     properties = ET.SubElement(node, _qn("pPr"))
     if paragraph.kind in HEADING_KINDS and heading_styles:
         _property(properties, "pStyle", val=heading_styles[paragraph.kind])
+    if native_list:
+        num_id, level, _, style_id = native_list
+        _property(properties, "pStyle", val=style_id)
+        numbering_properties = _property(properties, "numPr")
+        _property(numbering_properties, "ilvl", val=str(level))
+        _property(numbering_properties, "numId", val=num_id)
 
     if paragraph.kind in {ParagraphKind.TITLE, ParagraphKind.DATE}:
         _property(properties, "jc", val="center")
     style = paragraph_style(paragraph.kind, styles)
     spacing = style.attributes()
-    _property(properties, "spacing", **spacing)
-    if paragraph.kind in BODY_KINDS or style.first_line_chars:
-        _property(properties, "ind", firstLineChars=str(round(style.first_line_chars * 100)))
+    if not native_list:
+        _property(properties, "spacing", **spacing)
+    if not native_list and (paragraph.kind in BODY_KINDS or style.first_line_chars):
+        _property(properties, "ind", **style.indent_attributes())
     outline = (
         int(paragraph.kind.value.rsplit("_", 1)[1]) - 1 if paragraph.kind in HEADING_KINDS else 9
     )
     _property(properties, "outlineLvl", val=str(outline))
 
     run = ET.SubElement(node, _qn("r"))
-    run_properties = ET.SubElement(run, _qn("rPr"))
-    font, size, bold = style.font, str(round(style.size_pt * 2)), style.bold
-    _property(
-        run_properties,
-        "rFonts",
-        ascii=font,
-        hAnsi=font,
-        eastAsia={"Microsoft YaHei": "微软雅黑", "SimSun": "宋体"}.get(font, font),
-        cs=font,
-    )
-    if bold:
-        _property(run_properties, "b")
-    elif bold is False and styles is not None:
-        _property(run_properties, "b", val="0")
-    if styles is not None and bold is not None:
-        _property(run_properties, "bCs", val="1" if bold else "0")
-    _property(run_properties, "sz", val=size)
-    _property(run_properties, "szCs", val=size)
+    if not native_list:
+        run_properties = ET.SubElement(run, _qn("rPr"))
+        font, size, bold = style.font, str(round(style.size_pt * 2)), style.bold
+        _property(
+            run_properties,
+            "rFonts",
+            ascii=font,
+            hAnsi=font,
+            eastAsia={"Microsoft YaHei": "微软雅黑", "SimSun": "宋体"}.get(font, font),
+            cs=font,
+        )
+        if bold:
+            _property(run_properties, "b")
+        elif bold is False and styles is not None:
+            _property(run_properties, "b", val="0")
+        if styles is not None and bold is not None:
+            _property(run_properties, "bCs", val="1" if bold else "0")
+        _property(run_properties, "sz", val=size)
+        _property(run_properties, "szCs", val=size)
     text = ET.SubElement(run, _qn("t"), {f"{{{XML_NS}}}space": "preserve"})
-    text.text = paragraph.text
+    text.text = native_list[2] if native_list else paragraph.text
     return node
 
 
@@ -125,6 +135,7 @@ def _document_xml(
     template_xml: bytes,
     styles: dict | None = None,
     heading_styles: dict[ParagraphKind, str] | None = None,
+    native_lists: dict[int, tuple[str, int, str, str]] | None = None,
 ) -> bytes:
     template_root = ET.fromstring(template_xml)
     template_body = template_root.find(_qn("body"))
@@ -136,8 +147,10 @@ def _document_xml(
 
     root = ET.Element(_qn("document"))
     body = ET.SubElement(root, _qn("body"))
-    for paragraph in plan.paragraphs:
-        body.append(_paragraph_element(paragraph, styles, heading_styles))
+    for index, paragraph in enumerate(plan.paragraphs):
+        body.append(
+            _paragraph_element(paragraph, styles, heading_styles, (native_lists or {}).get(index))
+        )
     if section_properties is not None:
         body.append(section_properties)
     else:
@@ -148,7 +161,12 @@ def _document_xml(
 
 
 def render_docx(
-    plan: ReportPlan, template_path: Path, output_path: Path, *, styles: dict | None = None
+    plan: ReportPlan,
+    template_path: Path,
+    output_path: Path,
+    *,
+    styles: dict | None = None,
+    numbering: dict | None = None,
 ) -> None:
     """Copy a template package and replace its main document with the report plan."""
     if not template_path.is_file():
@@ -166,11 +184,30 @@ def render_docx(
             if DOCUMENT_PART not in source.namelist():
                 raise ValueError("模板不是有效的 DOCX：缺少 word/document.xml。")
             style_xml, heading_styles = _heading_style_definitions(source.read(STYLES_PART))
+            rel_part = "word/_rels/document.xml.rels"
+            relationships = (
+                ET.fromstring(source.read(rel_part))
+                if rel_part in source.namelist()
+                else ET.Element(f"{{{REL_NS}}}Relationships")
+            )
+            list_part = numbering_part(relationships)
+            lists = build_lists(
+                plan,
+                style_xml,
+                source.read(list_part) if list_part in source.namelist() else None,
+                styles,
+                numbering,
+            )
+            content_types = ET.fromstring(source.read("[Content_Types].xml"))
+            wire_numbering(relationships, content_types, list_part)
             replacements = {
                 DOCUMENT_PART: _document_xml(
-                    plan, source.read(DOCUMENT_PART), styles, heading_styles
+                    plan, source.read(DOCUMENT_PART), styles, heading_styles, lists.paragraphs
                 ),
-                STYLES_PART: style_xml,
+                STYLES_PART: lists.styles,
+                list_part: lists.numbering,
+                rel_part: serialize(relationships),
+                "[Content_Types].xml": serialize(content_types),
             }
             with tempfile.NamedTemporaryFile(
                 dir=output_path.parent, suffix=".docx", delete=False
@@ -184,6 +221,8 @@ def render_docx(
                         else source.read(info)
                     )
                     destination.writestr(info, payload)
+                for name in replacements.keys() - set(source.namelist()):
+                    destination.writestr(name, replacements[name])
         os.replace(temporary_name, output_path)
         temporary_name = None
     finally:

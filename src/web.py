@@ -34,6 +34,7 @@ from flask import (
 from werkzeug.datastructures import FileStorage
 from werkzeug.exceptions import RequestEntityTooLarge
 
+from .document_style import paragraph_style
 from .generation import generate_snapshot
 from .input_parser import inspect_input_options
 from .llm import (
@@ -380,6 +381,7 @@ def create_app(
             "regenerated": "所选内容块已重新生成，其他内容未改变。",
             "pdf": "当前版本的 PDF 版式预览已生成。",
         }
+        body_paragraphs = prepared_body_paragraphs(session.prepared, preset, session.report_date)
         directory_preview = []
         if any(section.heading_path for section in preset.sections):
             plan = renumber(
@@ -427,10 +429,12 @@ def create_app(
                 pdf_available=app.config["PDF_PREVIEW_SERVICE"].available,
                 rendered_blocks={
                     key: "\n".join(p.text for p in paragraphs)
-                    for key, paragraphs in prepared_body_paragraphs(
-                        session.prepared, preset, session.report_date
-                    ).items()
+                    for key, paragraphs in body_paragraphs.items()
                 },
+                rendered_paragraphs=body_paragraphs,
+                body_indent=lambda kind: paragraph_style(
+                    kind, preset.document.styles
+                ).first_line_chars,
                 normalize_text=lambda text: normalize_report_text(text, session.report_date),
             ),
             status,
@@ -628,8 +632,6 @@ def create_app(
             if options["content_mode"] != "original":
                 service = app.config.get("LLM_SERVICE") or LLMService(load_llm_config())
                 service.config.select_model(options["model"]).require_available()
-                if options["content_mode"] == "custom" and not options["custom_instruction"]:
-                    raise ValueError("自定义要求模式必须填写处理要求。")
             queue = app.config["TASK_QUEUE"]
             token, directory = queue.new_directory()
             source = save_input(upload, directory)

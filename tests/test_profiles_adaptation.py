@@ -130,7 +130,8 @@ def test_custom_format_contract_and_second_run_tampering(tmp_path):
     def corrupt(root):
         paragraph = root.findall(f"{Q}body/{Q}p")[-1]
         duplicate = ET.fromstring(ET.tostring(paragraph.find(Q + "r")))
-        duplicate.find(f"{Q}rPr/{Q}sz").set(Q + "val", "12")
+        properties = ET.SubElement(duplicate, Q + "rPr")
+        ET.SubElement(properties, Q + "sz", {Q + "val": "12"})
         paragraph.append(duplicate)
 
     broken = tmp_path / "broken.docx"

@@ -14,6 +14,7 @@ from .docx_security import DocxSecurityError, inspect_docx_package
 from .models import ParagraphKind, ReportPlan
 from .numbering import validate_numbering
 from .planner import CIRCLED_NUMBERS, validate_section_number
+from .word_lists import NUMBERING_REL, NUMBERING_TYPE, numbering_part, read_lists
 
 INFORMAL_NAME_PATTERN = re.compile(r"(?:[A-Za-z]{1,20}|[\u4e00-\u9fff]{1,3})[哥姐]")
 RELATIVE_WEEKDAY_PATTERN = re.compile(r"(?:本周|下周|周)[一二三四五六日天]")
@@ -40,17 +41,34 @@ def _text(paragraph: ET.Element) -> str:
     return "".join(node.text or "" for node in paragraph.iter(_qn("t")))
 
 
-def _require_style(paragraph: ET.Element, kind: ParagraphKind, styles: dict | None = None) -> None:
+def _require_style(
+    paragraph: ET.Element,
+    kind: ParagraphKind,
+    styles: dict | None = None,
+    definition: ET.Element | None = None,
+    list_level: ET.Element | None = None,
+) -> None:
     text = _text(paragraph)
     style = paragraph_style(kind, styles)
     properties = paragraph.find(_qn("pPr"))
     runs = [run for run in paragraph.iter(_qn("r")) if _text(run)]
     if properties is None or not runs:
         raise ReportValidationError(f"段落缺少格式属性：{text}")
+    inherited_p = definition.find(_qn("pPr")) if definition is not None else None
+    inherited_r = definition.find(_qn("rPr")) if definition is not None else None
+
+    def effective(direct, inherited, key):
+        node = direct.find(_qn(key)) if direct is not None else None
+        return (
+            node
+            if node is not None
+            else (inherited.find(_qn(key)) if inherited is not None else None)
+        )
+
     for run in runs:
         props = run.find(_qn("rPr"))
-        fonts = props.find(_qn("rFonts")) if props is not None else None
-        size = props.find(_qn("sz")) if props is not None else None
+        fonts = effective(props, inherited_r, "rFonts")
+        size = effective(props, inherited_r, "sz")
         east_asia = {"Microsoft YaHei": "微软雅黑", "SimSun": "宋体"}.get(style.font, style.font)
         if fonts is None or any(
             fonts.get(_qn(key)) != value
@@ -63,19 +81,21 @@ def _require_style(paragraph: ET.Element, kind: ParagraphKind, styles: dict | No
             raise ReportValidationError(f"段落字体不正确：{text}")
         if size is None or size.get(_qn("val")) != str(round(style.size_pt * 2)):
             raise ReportValidationError(f"段落字号不正确：{text}")
-        bold = props.find(_qn("b"))
+        bold = effective(props, inherited_r, "b")
         actual_bold = bold is not None and bold.get(_qn("val"), "1") not in {"0", "false", "off"}
         if style.bold is not None and actual_bold != style.bold:
             raise ReportValidationError(f"段落加粗不正确：{text}")
-    spacing = properties.find(_qn("spacing"))
+    spacing = effective(properties, inherited_p, "spacing")
     if spacing is None or any(
         spacing.get(_qn(key), "0") != value for key, value in style.attributes().items()
     ):
         raise ReportValidationError(f"段落行距或间距不正确：{text}")
     if kind in BODY_KINDS or style.first_line_chars:
         indent = properties.find(_qn("ind"))
-        if indent is None or indent.get(_qn("firstLineChars")) != str(
-            round(style.first_line_chars * 100)
+        if indent is None and list_level is not None:
+            indent = list_level.find(f"{_qn('pPr')}/{_qn('ind')}")
+        if indent is None or any(
+            indent.get(_qn(key)) != value for key, value in style.indent_attributes().items()
         ):
             raise ReportValidationError(f"正文首行缩进不正确：{text}")
 
@@ -249,12 +269,29 @@ def validate_report(
                 raise ReportValidationError("DOCX 缺少 word/document.xml。")
             root = ET.fromstring(package.read(DOCUMENT_PART))
             style_root = ET.fromstring(package.read(STYLES_PART))
-    except (zipfile.BadZipFile, ET.ParseError) as exc:
+            rel_part = "word/_rels/document.xml.rels"
+            rels = ET.fromstring(package.read(rel_part)) if rel_part in package.namelist() else None
+            list_root = None
+            if rels is not None and any(n.get("Type") == NUMBERING_REL for n in rels):
+                part = numbering_part(rels)
+                types = ET.fromstring(package.read("[Content_Types].xml"))
+                if not any(
+                    n.get("PartName") == "/" + part and n.get("ContentType") == NUMBERING_TYPE
+                    for n in types
+                ):
+                    raise ReportValidationError("DOCX 编号部件类型无效。")
+                list_root = ET.fromstring(package.read(part))
+    except (zipfile.BadZipFile, ET.ParseError, KeyError, ValueError) as exc:
         raise ReportValidationError(f"DOCX 文件无效：{exc}") from exc
 
     _require_page_layout(root)
     paragraphs = root.findall(f".//{_qn('body')}/{_qn('p')}")
-    texts = [_text(paragraph) for paragraph in paragraphs]
+    definitions = {node.get(_qn("styleId")): node for node in style_root.findall(_qn("style"))}
+    try:
+        lists = read_lists(paragraphs, list_root, definitions, numbering)
+    except ValueError as exc:
+        raise ReportValidationError(str(exc)) from exc
+    texts = [lists[i][0] if i in lists else _text(p) for i, p in enumerate(paragraphs)]
     expected_headings = {
         f"{section_number + offset}. {title}" for offset, title in enumerate(heading_titles)
     }
@@ -275,14 +312,23 @@ def validate_report(
         raise ReportValidationError("自定义编号校验需要报告计划。")
 
     heading_count = 0
-    definitions = {node.get(_qn("styleId")): node for node in style_root.findall(_qn("style"))}
     for index, (paragraph, text) in enumerate(zip(paragraphs, texts, strict=True)):
         kind = (
             expected_plan.paragraphs[index].kind
             if expected_plan is not None
             else _paragraph_kind(text, report_title, expected_headings)
         )
-        _require_style(paragraph, kind, styles)
+        reference = paragraph.find(f"{_qn('pPr')}/{_qn('pStyle')}")
+        definition = definitions.get(reference.get(_qn("val"))) if reference is not None else None
+        if index in lists and lists[index][1] is not kind:
+            raise ReportValidationError("正文列表级别与已确认报告计划不一致。")
+        _require_style(
+            paragraph,
+            kind,
+            styles,
+            definition,
+            lists[index][2] if index in lists else None,
+        )
         _require_outline(paragraph, kind, definitions)
         _require_wording(text, kind)
         if kind in HEADING_KINDS:

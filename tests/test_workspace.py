@@ -218,11 +218,10 @@ def test_original_preview_shows_exported_normalized_body(tmp_path: Path, preset:
         response.text,
         re.DOTALL,
     ).group(1)
-    assert current == (
-        "1、进展内容：\n（1）联系相关负责人，使用LightGBM，AUC 0.81，2026年10月14日复核。"
-    )
+    assert current == ("1、联系相关负责人，使用LightGBM，AUC 0.81，2026年10月14日复核。")
     document = _document_text(client.get(f"/download/{token}"))
-    assert all(line in document for line in current.splitlines())
+    # DOCX numbers are native list labels rather than duplicated literal text.
+    assert all(re.sub(r"^\d+、", "", line) in document for line in current.splitlines())
     session = store.load_session(token)
     block = session.prepared.blocks[0]
     assert block.original_text == original
@@ -283,7 +282,7 @@ def test_safe_manual_edit_persists_and_updates_downloaded_docx(tmp_path: Path) -
     assert edited in refreshed.text
     assert refreshed.text.count("查看变更对比") == 1
     assert refreshed.text.count('class="diff-line removed"') == 1
-    assert refreshed.text.count('class="diff-line added"') == 2
+    assert refreshed.text.count('class="diff-line added"') == 1
     assert '<div class="version-heading"><b>原文</b>' not in refreshed.text
     document = _document_text(client.get(f"/download/{token}"))
     assert edited in document
@@ -356,7 +355,7 @@ def test_editor_and_persistent_diff_follow_selected_content(tmp_path: Path) -> N
         r'<textarea name="edited_text"[^>]*>(.*?)</textarea>', page.text, re.DOTALL
     )
     assert "模型候选备注" in textarea.group(1)
-    assert "1、进展内容：" in textarea.group(1)
+    assert "1、进展内容：" not in textarea.group(1)
     edit_route = f"/workspace/{token}/blocks/{block.block_id}/edit"
     draft = {"revision": 1, "edited_text": "人工确定结果，AUC 0.91。"}
     edit_preview = client.post(edit_route + "-preview", data=draft)
@@ -433,7 +432,7 @@ def test_conflicting_model_candidate_cannot_be_selected(tmp_path: Path) -> None:
     assert current.prepared.blocks[0].effective_version == "original"
 
     page = client.get(f"/workspace/{token}")
-    assert 'rows="5" required>1、进展内容：\n（1）完成模型验证，AUC 0.81。</textarea>' in page.text
+    assert 'rows="5" required>1、完成模型验证，AUC 0.81。</textarea>' in page.text
     confirmed = client.post(
         f"/workspace/{token}/blocks/{block.block_id}/select",
         data={"revision": 1, "version": "generated", "confirm_warnings": "yes"},

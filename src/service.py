@@ -171,7 +171,13 @@ def render_prepared_report(
     else:
         plan = build_prepared_report_plan(prepared, preset, report_date, effective_section)
     plan = renumber(plan, preset.document.numbering)
-    render_docx(plan, template_path, output_path, styles=preset.document.styles)
+    render_docx(
+        plan,
+        template_path,
+        output_path,
+        styles=preset.document.styles,
+        numbering=preset.document.numbering,
+    )
     expected_headings = tuple(
         section.title
         for section in preset.sections

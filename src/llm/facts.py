@@ -78,6 +78,7 @@ LIST_MARKER_PATTERN = re.compile(
 
 MODEL_ALIASES = {
     "lgb": "lightgbm",
+    "lgbm": "lightgbm",
     "lightgbm": "lightgbm",
     "tabpfn": "tabpfn",
     "tabicl": "tabicl",
@@ -85,6 +86,7 @@ MODEL_ALIASES = {
     "qwen": "qwen",
     "deepseek": "deepseek",
     "xgboost": "xgboost",
+    "xgb": "xgboost",
     "catboost": "catboost",
     "bert": "bert",
     "glm": "glm",

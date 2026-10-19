@@ -16,6 +16,15 @@ def test_model_version_normalizes_spacing_case_and_version_marker() -> None:
     assert _facts("TabPFN 3.1", FactKind.MODEL_VERSION)[0].value == "3.1"
 
 
+def test_normalizer_model_aliases_keep_fact_identity():
+    from weekly_report_agent.normalizer import normalize_report_text
+
+    for source in ("lgbm 4.5", "xgb 2.1", "使用lgbm和xgb验证，AUC 0.81。"):
+        assert [f.identity for f in extract_facts(source)] == [
+            f.identity for f in extract_facts(normalize_report_text(source))
+        ]
+
+
 def test_typed_numbers_do_not_overlap() -> None:
     facts = extract_facts("TabPFN3.0于2026年10月12日验证5000样本，AUC 0.81，提升3%，增加2个百分点")
 

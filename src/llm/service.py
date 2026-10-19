@@ -14,7 +14,7 @@ from weekly_report_agent.timing import TimingRecorder, measure
 from .client import LLMClient, OpenAICompatibleClient
 from .config import LLMConfig
 from .facts import protected_facts
-from .validation import ValidationLevel, ValidationResult, validate_generated_text
+from .validation import ADVISORY_KINDS, ValidationLevel, ValidationResult, validate_generated_text
 
 
 class ContentMode(str, Enum):
@@ -22,30 +22,21 @@ class ContentMode(str, Enum):
 
     ORIGINAL = "original"
     POLISH = "polish"
-    CONCISE = "concise"
-    EXPAND = "expand"
-    CUSTOM = "custom"
 
 
 MODE_LABELS: dict[ContentMode, str] = {
     ContentMode.ORIGINAL: "原文保留",
     ContentMode.POLISH: "规范润色",
-    ContentMode.CONCISE: "精简总结",
-    ContentMode.EXPAND: "详细整理",
-    ContentMode.CUSTOM: "自定义要求",
 }
 MODE_OPTION_LABELS: dict[ContentMode, str] = {
     ContentMode.ORIGINAL: "原文保留（不调用模型）",
-    ContentMode.POLISH: "规范润色（等长改写）",
-    ContentMode.CONCISE: "精简总结（压缩去重）",
-    ContentMode.EXPAND: "详细整理（结构扩写）",
-    ContentMode.CUSTOM: "自定义要求（按输入处理）",
+    ContentMode.POLISH: "规范润色（语义分条与表达整理）",
 }
 
 
 @dataclass(frozen=True, slots=True)
 class ModeProfile:
-    """An enforceable writing contract for one LLM content mode."""
+    """Writing instructions for an LLM content mode."""
 
     objective: str
     length_rule: str
@@ -56,36 +47,16 @@ class ModeProfile:
 
 MODE_PROFILES: dict[ContentMode, ModeProfile] = {
     ContentMode.POLISH: ModeProfile(
-        objective="在不改变信息量和事项粒度的前提下，将原文改成正式、流畅的周报表述。",
-        length_rule="输出长度通常控制在原文的 85%～115%；不要主动压缩或扩写。",
-        organization="保持原事项顺序和段落数量，仅修正口语、重复连接词、病句和术语写法。",
-        required_actions=("使用正式书面语", "补齐必要标点", "保持每项工作的原有粒度"),
-        forbidden_actions=("合并本来独立的任务", "增加背景、原因、方法或评价", "写成摘要式短句"),
-    ),
-    ContentMode.CONCISE: ModeProfile(
-        objective="显著压缩重复和过程性表述，形成可快速浏览的成果摘要。",
-        length_rule="目标长度为原文的 50%～75%；若受保护事实较多，以完整保留事实为先。",
-        organization="合并同类或重复表达，删除套话，每项采用“动作/成果 + 关键事实”的紧凑结构。",
-        required_actions=("去除重复主语和同义句", "合并重复事实", "优先呈现结果、指标和状态"),
-        forbidden_actions=(
-            "删除 protected_facts",
-            "把不同任务错误合并",
-            "使用空泛总结替代具体事实",
+        objective="在保留来源事实与正确归属的前提下，纠正分段和层级，将原文整理成正式、清晰的周报表述。",
+        length_rule="不设置长度比例；允许压缩重复、补全衔接和重新组织，以信息准确、清晰完整为准。",
+        organization="依据事项语义重新分条、合并断行并纠正父子层级，原始换行、序号和标点不可靠，不要求保持段落数量。",
+        required_actions=(
+            "使用正式书面语",
+            "区分独立任务与说明子项",
+            "纠正错误分段与父子层级",
+            "普通句末用句号，真实父项引出子项用冒号",
         ),
-    ),
-    ContentMode.EXPAND: ModeProfile(
-        objective="把简略记录整理成层次清楚、语义完整的周报叙述，但不增加源文没有的事实。",
-        length_rule="目标长度为原文的 120%～160%；原文事实不足时宁可少扩写，也不得编造。",
-        organization="按“工作对象 + 已有动作 + 已有结果/状态”重组句子，补充指代和逻辑衔接。",
-        required_actions=("补全省略的句子成分", "明确已有事实之间的衔接", "提升可读性和完整性"),
-        forbidden_actions=("推测目的、原因或影响", "虚构执行过程和结论", "新增完成状态或量化成果"),
-    ),
-    ContentMode.CUSTOM: ModeProfile(
-        objective="严格按用户要求调整表达形式；用户要求只控制文风和组织，不得越过事实边界。",
-        length_rule="长度服从用户要求；用户未指定时保持与原文接近。",
-        organization="优先执行用户给出的结构和表达要求，同时保持每项事实的正确归属。",
-        required_actions=("完整执行 custom_instruction 中可安全执行的表达要求",),
-        forbidden_actions=("执行任何新增、删除、篡改或错误归属事实的要求",),
+        forbidden_actions=("编造背景、原因、过程或结论", "篡改关键事实或错误归属不同任务"),
     ),
 }
 READ_ONLY_CONTEXT_FIELDS = ("project", "detail", "status", "date", "report_date")
@@ -118,40 +89,35 @@ def _immutable_context(prepared: PreparedReport, block: ContentBlock) -> tuple[d
     return tuple(contexts)
 
 
-def _length_target(text: str, mode: ContentMode) -> dict[str, int] | None:
-    """Return an explicit per-block character target for preset writing modes."""
-    ratios = {
-        ContentMode.POLISH: (0.85, 1.15),
-        ContentMode.CONCISE: (0.50, 0.75),
-        ContentMode.EXPAND: (1.20, 1.60),
-    }
-    if mode not in ratios:
-        return None
-    minimum_ratio, maximum_ratio = ratios[mode]
-    length = len(text.strip())
-    return {
-        "source_chars": length,
-        "minimum_chars": max(1, round(length * minimum_ratio)),
-        "maximum_chars": max(1, round(length * maximum_ratio)),
-    }
-
-
 def _request_block(
-    prepared: PreparedReport, block: ContentBlock, mode: ContentMode
+    prepared: PreparedReport,
+    block: ContentBlock,
+    mode: ContentMode,
+    custom_instruction: str | None = None,
 ) -> dict[str, object]:
+    facts = protected_facts(block.original_text)
+    advisory = {kind.value for kind in ADVISORY_KINDS}
     payload: dict[str, object] = {
         "block_id": block.block_id,
         "editable_text": block.original_text,
         "immutable_context": _immutable_context(prepared, block),
-        "protected_facts": protected_facts(block.original_text),
+        "protected_facts": {key: values for key, values in facts.items() if key not in advisory},
+        "reference_facts": {key: values for key, values in facts.items() if key in advisory},
     }
-    if "content" in (block.source_fields or (block.source_field,)):
-        payload["primary_body"] = [
-            row.fields.get("content", "") for row in prepared.sources_for_block(block.block_id)
-        ]
-    length_target = _length_target(block.original_text, mode)
-    if length_target is not None:
-        payload["length_target"] = length_target
+    fields = block.source_fields or (block.source_field,)
+    payload["primary_field"] = "content" if "content" in fields else fields[0]
+    payload["source_units"] = [
+        {
+            "source_id": row.source_id,
+            "fields": {key: row.fields[key] for key in fields if row.fields.get(key, "").strip()},
+            "context": {
+                key: row.fields[key]
+                for key in READ_ONLY_CONTEXT_FIELDS
+                if key not in fields and row.fields.get(key, "").strip()
+            },
+        }
+        for row in prepared.sources_for_block(block.block_id)
+    ]
     return payload
 
 
@@ -164,12 +130,21 @@ def _mode_contract(mode: ContentMode, custom_instruction: str | None) -> dict[st
         "organization": profile.organization,
         "required_actions": profile.required_actions,
         "forbidden_actions": profile.forbidden_actions,
+        "validation_policy": {
+            "structure": "允许重分段、调整顺序、合并同类表达，不按原文段落数量或长短验收",
+            "critical": "指标、百分比、模型版本、日期、明确数量与任务状态须准确保留",
+            "advisory": "术语提及和无单位数字差异提示人工核对，不因此单独回退",
+        },
     }
-    if mode is ContentMode.CUSTOM:
-        instruction = (custom_instruction or "").strip()
-        if not instruction:
-            raise ValueError("自定义要求模式必须填写处理要求。")
+    instruction = (custom_instruction or "").strip()
+    if instruction:
         contract["custom_instruction"] = instruction
+        contract["organization"] = (
+            "优先按用户补充要求组织表达，同时纠正断行和任务归属；不得新增、删除、篡改或错误归属来源事实。"
+        )
+        contract["length_rule"] = (
+            "用户明确提出篇幅要求时按要求处理，否则不限制长度比例；关键事实准确性优先。"
+        )
     return contract
 
 
@@ -180,20 +155,31 @@ def _messages(
     custom_instruction: str | None,
 ) -> tuple[dict[str, str], dict[str, str]]:
     contract = _mode_contract(mode, custom_instruction)
-    source = [_request_block(prepared, block, mode) for block in blocks]
+    source = [_request_block(prepared, block, mode, custom_instruction) for block in blocks]
     system = (
         "你是公司周报文本整理器，只能改写 editable_text。"
-        "primary_body若存在表示主要正文，围绕其主题整合其他已选正文，不能遗漏补充正文的事实。"
+        "primary_field表示主要正文字段，source_units保留原始行边界及事项上下文。"
+        "围绕主要正文整合补充字段，不遗漏事实，不因合并多行就将不同事项变成上下级。"
         "mode_contract 是本次模式必须执行的写作契约，不是参考建议；"
         "必须按其中的 objective、length_rule、organization、required_actions 和 "
-        "forbidden_actions 生成明显符合所选模式的结果。每个块的 length_target 是具体字数目标；"
-        "若与事实完整性冲突，优先完整保留 protected_facts。"
+        "forbidden_actions 生成符合所选模式的结果，不限制段落数量、顺序或长度比例。"
+        "validation_policy区分关键事实与提示性差异，表达和结构可以充分重组。"
         "immutable_context 中的项目、任务名称、结构状态等字段只用于理解上下文，"
-        "不得复制、改写或作为返回字段。不得生成标题编号或 Word 格式。"
-        "不得新增、删除、篡改或错误归属 protected_facts 中的指标、数字、日期、"
-        "模型版本、技术名和任务状态；允许调整纯列表序号。"
+        "不得复制、改写或作为返回字段。不得改变报告标题或生成 Word 格式。"
+        "必须重新判断正文结构：换行不等于新事项，冒号不等于后续所有行都属于子项。"
+        "说明、结论、修正点应跟随其所属工作；培训材料等独立事项不得挂到方法验证下。"
+        "不得添加空泛的进展内容/具体事项父项；不得输出重复项目符号。"
+        "包括/如下之后若列举多个路径、对象或子工作，应由父项引出level=2/3的清单，"
+        "不得只去掉项目符号后将整个清单用分号挤回同一段。"
+        "独立完整工作句末用句号；冒号只引出真实子项，分号用于段内并列分句。"
+        "protected_facts中的指标、百分比、日期、明确数量、模型版本与状态须准确保留，"
+        "不得编造、篡改或错误归属；reference_facts为术语与无单位数字提示，允许语义简化，"
+        "不要求逐字保留，不能凭空替换模型或猜测数字；允许调整列表序号。"
         "必须为每个输入 block_id 返回且仅返回一项，禁止改变 block_id。"
-        '只输出 JSON 对象，格式为 {"blocks":[{"block_id":"...","text":"..."}]}。'
+        '只输出 JSON 对象，格式为 {"blocks":[{"block_id":"...",'
+        '"paragraphs":[{"level":1,"text":"..."}]}]}。'
+        "level仅为正文层级1/2/3，第一项必须是1，不能跳级。每项text是一段完整文字，不带序号或项目符号。"
+        "独立事项用level=1，真实明细用level=2/3；同一任务的说明合并到所属段落，编号由本地规则生成。"
     )
     user = json.dumps(
         {"mode": mode.value, "mode_contract": contract, "blocks": source},
@@ -214,7 +200,7 @@ def _correction_messages(
     for block in blocks:
         payload.append(
             {
-                **_request_block(prepared, block, mode),
+                **_request_block(prepared, block, mode, custom_instruction),
                 "unsafe_candidate": candidates[block.block_id],
                 "conflicts": [issue.message for issue in results[block.block_id].issues],
             }
@@ -222,7 +208,9 @@ def _correction_messages(
     system = (
         "你正在修正周报候选文本中的严重事实冲突。只修正 unsafe_candidate，"
         "使其与 editable_text 和 protected_facts 一致；不得修改 immutable_context，"
-        "不得添加新事实。每个 block_id 只返回一次，只输出约定的 JSON 对象。"
+        "不得添加新事实。每个 block_id 只返回一次，保留正确的语义分条及父子归属。"
+        '只输出JSON {"blocks":[{"block_id":"...","paragraphs":[{"level":1,"text":"..."}]}]}。'
+        "level为正文层级1/2/3，不跳级，text不带编号。"
     )
     user = json.dumps(
         {
@@ -233,6 +221,40 @@ def _correction_messages(
         ensure_ascii=False,
     )
     return {"role": "system", "content": system}, {"role": "user", "content": user}
+
+
+def _structured_body(value: object) -> str:
+    """Serialize model-selected semantic levels into deterministic body markers."""
+    from ..planner import CIRCLED_NUMBERS, _strip_bullet
+
+    if not isinstance(value, list) or not value or len(value) > 500:
+        raise LLMResponseError("LLM 正文段落数组无效。")
+    counters, previous, lines = [0, 0, 0], 0, []
+    for paragraph in value:
+        if not isinstance(paragraph, dict):
+            raise LLMResponseError("LLM 正文段落格式无效。")
+        level, text = paragraph.get("level"), paragraph.get("text")
+        if type(level) is not int or not 1 <= level <= 3 or level > previous + 1:
+            raise LLMResponseError("LLM 正文层级无效或跳级。")
+        if not isinstance(text, str) or not text.strip() or "\n" in text or "\r" in text:
+            raise LLMResponseError("LLM 正文须为非空单段文字。")
+        counters[level - 1] += 1
+        counters[level:] = [0] * (3 - level)
+        if level == 3 and counters[2] > len(CIRCLED_NUMBERS):
+            raise LLMResponseError("正文三级子项超过支持数量。")
+        prefix = (
+            f"{counters[0]}、"
+            if level == 1
+            else f"（{counters[1]}）"
+            if level == 2
+            else CIRCLED_NUMBERS[counters[2] - 1]
+        )
+        text = _strip_bullet(text)
+        if not text:
+            raise LLMResponseError("LLM 正文不能仅包含项目符号。")
+        lines.append(prefix + text)
+        previous = level
+    return "\n".join(lines)
 
 
 def _decode_response(content: str, expected_ids: tuple[str, ...]) -> dict[str, str]:
@@ -254,7 +276,7 @@ def _decode_response(content: str, expected_ids: tuple[str, ...]) -> dict[str, s
         if not isinstance(item, dict):
             raise LLMResponseError("LLM 内容块格式无效，原文已保留。")
         block_id = item.get("block_id")
-        text = item.get("text")
+        text = _structured_body(item["paragraphs"]) if "paragraphs" in item else item.get("text")
         if not isinstance(block_id, str) or not isinstance(text, str) or not text.strip():
             raise LLMResponseError("LLM 内容块 ID 或文本无效，原文已保留。")
         if block_id in results:
@@ -302,7 +324,7 @@ def _warning_lines(result: ValidationResult, *, correction_failed: bool = False)
     if result.level is ValidationLevel.CONFLICT:
         return (*lines, "候选需谨慎使用，可编辑修正或确认告警后采用。")
     if result.level is ValidationLevel.REVIEW:
-        return (*lines, "该候选文本待人工核对，可确认后采用。")
+        return (*lines, "提示性差异不阻止采用，建议核对。")
     return lines
 
 
@@ -452,7 +474,7 @@ class LLMService:
                         ValidationLevel.CONFLICT: "conflict",
                     }[result.level],
                     validation_warnings=_warning_lines(result, correction_failed=correction_failed),
-                    selected_version="auto",
+                    selected_version="generated" if result.accepted else "auto",
                 )
             )
         return replace(prepared, blocks=tuple(updated))

@@ -46,26 +46,18 @@ class ValidationResult:
 
     level: ValidationLevel
     issues: tuple[ValidationIssue, ...] = ()
+    allow_review: bool = False
 
     @property
     def accepted(self) -> bool:
-        """Only fully validated text can flow into automatic DOCX export."""
-        return self.level is ValidationLevel.PASS
+        """Polish may use advisory-only candidates; conflicts always require confirmation."""
+        return self.level is ValidationLevel.PASS or (
+            self.allow_review and self.level is ValidationLevel.REVIEW
+        )
 
 
-ALWAYS_CRITICAL_KINDS = {
-    FactKind.MODEL_VERSION,
-    FactKind.METRIC,
-    FactKind.PERCENT,
-    FactKind.PERCENTAGE_POINT,
-    FactKind.STATUS,
-}
-CONCISE_OPTIONAL_KINDS = {
-    FactKind.DATE,
-    FactKind.QUANTITY,
-    FactKind.TECHNICAL_TERM,
-    FactKind.PLAIN_NUMBER,
-}
+ADVISORY_KINDS = {FactKind.TECHNICAL_TERM, FactKind.PLAIN_NUMBER}
+
 AGGREGATION_UNITS = {"项", "条", "组"}
 FACT_LABELS = {
     FactKind.MODEL_VERSION: "模型与版本",
@@ -241,17 +233,8 @@ def _status_issues(
     return issues
 
 
-def _missing_level(kind: FactKind, mode: str) -> ValidationLevel:
-    """Apply completeness policy without relaxing invention or fact mutation checks."""
-    if kind in ALWAYS_CRITICAL_KINDS:
-        return ValidationLevel.CONFLICT
-    if mode == "concise" and kind in CONCISE_OPTIONAL_KINDS:
-        return ValidationLevel.REVIEW
-    return ValidationLevel.CONFLICT
-
-
 def validate_generated_text(original: str, generated: str, mode: str) -> ValidationResult:
-    """Compare normalized facts with mode-specific completeness and attribution rules."""
+    """Compare normalized facts with strict completeness and attribution rules."""
     original_facts = extract_facts(original)
     generated_facts = _remove_derived_aggregation_counts(original_facts, extract_facts(generated))
     before = _identity_map(original_facts)
@@ -289,7 +272,9 @@ def validate_generated_text(original: str, generated: str, mode: str) -> Validat
             continue
         issues.append(
             ValidationIssue(
-                _missing_level(fact.kind, mode),
+                ValidationLevel.REVIEW
+                if mode == "polish" and fact.kind in ADVISORY_KINDS
+                else ValidationLevel.CONFLICT,
                 "fact_missing",
                 f"生成内容缺少{FACT_LABELS[fact.kind]}：{fact.display}",
                 _excerpt(original, fact),
@@ -302,7 +287,9 @@ def validate_generated_text(original: str, generated: str, mode: str) -> Validat
         if fact.identity not in used_added:
             issues.append(
                 ValidationIssue(
-                    ValidationLevel.CONFLICT,
+                    ValidationLevel.REVIEW
+                    if mode == "polish" and fact.kind in ADVISORY_KINDS
+                    else ValidationLevel.CONFLICT,
                     "fact_added",
                     f"生成内容新增{FACT_LABELS[fact.kind]}：{fact.display}",
                     _excerpt(original, None),
@@ -313,4 +300,4 @@ def validate_generated_text(original: str, generated: str, mode: str) -> Validat
 
     issues.extend(_status_issues(original, generated, original_facts, generated_facts))
     level = max((issue.level for issue in issues), default=ValidationLevel.PASS)
-    return ValidationResult(level, tuple(issues))
+    return ValidationResult(level, tuple(issues), allow_review=mode == "polish")

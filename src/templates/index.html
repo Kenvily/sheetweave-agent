@@ -90,12 +90,12 @@
           </label>
         </div>
 
-        <label id="custom-instruction-field" class="field"{% if selected_mode != 'custom' %} hidden{% endif %}>
-          <span>自定义要求</span>
-          <textarea name="custom_instruction" rows="3" placeholder="例如：按成果、问题和后续动作整理，不改变任何事实。"{% if selected_mode == 'custom' %} required{% endif %}>{{ form.get('custom_instruction', '') }}</textarea>
+        <label id="custom-instruction-field" class="field"{% if selected_mode != 'polish' %} hidden{% endif %}>
+          <span>补充要求（可选）</span>
+          <textarea name="custom_instruction" rows="3" placeholder="例如：按成果、问题和后续动作整理，不改变任何事实。">{{ form.get('custom_instruction', '') }}</textarea>
         </label>
 
-        <p class="mode-hint" id="mode-hint" role="status">原文模式只进行术语规范化与排版，无需调用模型。</p>
+        <p class="mode-hint" id="mode-hint" role="status">保留原文事项顺序与显式层级，仅规范术语和格式，不调用模型。</p>
         </fieldset>
         <div class="actions">
           <span class="action-hint">建议先审核，再下载正式文件。</span>
@@ -167,13 +167,13 @@
               {% if block.validation_level == 'pass' %}
               <strong>事实校验通过</strong><span>模型结果将用于 DOCX</span>
               {% elif block.validation_level == 'review' %}
-              <strong>待人工确认</strong><span>本次 DOCX 已自动使用原文</span>
+              <strong>提示性差异</strong><span>模型结果用于 DOCX，建议核对提示</span>
               {% else %}
               <strong>严重冲突</strong><span>本次 DOCX 已自动使用原文</span>
               {% endif %}
             </div>
             <div class="text-version"><b>原文</b><p>{{ block.original_text }}</p></div>
-            <div class="text-version result{% if block.validation_level != 'pass' %} unsafe{% endif %}"><b>模型候选</b><p>{{ block.generated_text }}</p></div>
+            <div class="text-version result{% if block.validation_level == 'conflict' %} unsafe{% endif %}"><b>模型候选</b><p>{{ block.generated_text }}</p></div>
             {% if block.validation_warnings %}
             <ul class="validation-issues">
               {% for warning in block.validation_warnings %}<li>{{ warning }}</li>{% endfor %}
@@ -233,15 +233,16 @@
       } catch (_) { /* Browser storage is optional, never identity. */ }
 
       const updateCustomInstruction = () => {
-        const isCustom = contentMode.value === "custom";
+        const isCustom = contentMode.value === "polish";
         customInstructionField.hidden = !isCustom;
-        customInstruction.required = isCustom;
+        customInstruction.required = false;
+        customInstruction.disabled = !isCustom;
         const usesModel = contentMode.value !== "original";
         document.getElementById("model-field").hidden = !usesModel;
         form.elements.model.disabled = !usesModel;
         document.getElementById("mode-hint").textContent = usesModel
-          ? "模型只整理表达。生成后请核对数字、结论与候选告警。"
-          : "原文模式只进行术语规范化与排版，无需调用模型。";
+          ? "允许模型重分段、重组结构；关键事实保持准确，提示性差异供核对。"
+          : "保留原文事项顺序与显式层级，仅规范术语和格式，不调用模型。";
         document.getElementById("summary-mode").textContent = contentMode.selectedOptions[0].textContent;
       };
       contentMode.addEventListener("change", updateCustomInstruction);

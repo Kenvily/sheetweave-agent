@@ -20,13 +20,14 @@ from .normalizer import normalize_report_text
 from .rules import RulePreset
 
 TERMINAL_PUNCTUATION = re.compile(r"[。；：！？.!?]$")
-TOP_LEVEL_NUMBER = re.compile(r"^(\d+)[、.．]\s*(.*)$")
+TOP_LEVEL_NUMBER = re.compile(r"^(\d+)(?:、|[.．](?!\d))\s*(.*)$")
 SUB_LEVEL_NUMBER = re.compile(r"^(?:[（(]?(\d+)[)）])\s*(.*)$")
 CIRCLED_NUMBERS = "①②③④⑤⑥⑦⑧⑨⑩⑪⑫⑬⑭⑮⑯⑰⑱⑲⑳"
 CIRCLED_NUMBER = re.compile(rf"^[{CIRCLED_NUMBERS}]\s*(.*)$")
 INLINE_NUMBER = re.compile(r"(?<=[，,。；;：:])\s*(\d+)[.、](?!\d)\s*")
 MIN_SECTION_NUMBER = 1
 MAX_SECTION_NUMBER = 999
+BULLET_PREFIX = re.compile(r"^(?:[•●▪◦‣·]+\s*|[-*]\s+)")
 
 
 @dataclass(slots=True)
@@ -58,6 +59,8 @@ def _ensure_punctuation(text: str, *, label: bool = False) -> str:
         if value.endswith(("：", ":")):
             return value
         return f"{value.rstrip('，,；;。')}："
+    if value.endswith(("；", ";", "：", ":", "，", ",")):
+        return f"{value[:-1]}。"
     if not TERMINAL_PUNCTUATION.search(value):
         return f"{value}。"
     return value
@@ -68,7 +71,7 @@ def _split_inline_items(text: str) -> tuple[str, list[str]]:
     matches = list(INLINE_NUMBER.finditer(text))
     if not matches:
         return text, []
-    prefix = text[: matches[0].start()].strip() or "进展内容"
+    prefix = text[: matches[0].start()].strip("，,；;：:。 ")
     items = [
         text[match.end() : matches[index + 1].start() if index + 1 < len(matches) else None].strip()
         for index, match in enumerate(matches)
@@ -76,70 +79,69 @@ def _split_inline_items(text: str) -> tuple[str, list[str]]:
     return prefix, [item for item in items if item]
 
 
-def _new_default_group() -> _BodyGroup:
-    return _BodyGroup("进展内容", 1)
+def _strip_bullet(text: str) -> str:
+    return BULLET_PREFIX.sub("", text.strip()).strip()
 
 
 def _parse_body(progress: str) -> list[_BodyGroup]:
-    """Infer up to three body levels from source markers without rewriting facts."""
-    lines = [line.strip() for line in progress.splitlines() if line.strip()]
+    """Read explicit body markers; plain lines are siblings, never synthetic wrapper children."""
     groups: list[_BodyGroup] = []
     current: _BodyGroup | None = None
     active_child: _BodyItem | None = None
-
-    for line in lines:
+    orphan_root = False
+    for raw in progress.splitlines():
+        raw = raw.strip()
+        if not raw:
+            continue
+        bullet = bool(BULLET_PREFIX.match(raw))
+        line = _strip_bullet(raw)
+        if not line:
+            continue
         top_match = TOP_LEVEL_NUMBER.match(line)
         sub_match = SUB_LEVEL_NUMBER.match(line)
         circled_match = CIRCLED_NUMBER.match(line)
-
         if top_match:
-            source_number = int(top_match.group(1))
-            content = top_match.group(2).strip() or "进展内容"
+            orphan_root = False
+            content = _strip_bullet(top_match.group(2))
+            if not content:
+                continue
             group_text, inline_items = _split_inline_items(content)
-            if current is None or source_number > current.source_number:
-                current = _BodyGroup(group_text, source_number)
-                groups.append(current)
+            if not group_text and inline_items:
+                for item in inline_items:
+                    current = _BodyGroup(_strip_bullet(item), len(groups) + 1)
+                    groups.append(current)
                 active_child = None
-                for inline_item in inline_items:
-                    active_child = _BodyItem(inline_item)
-                    current.children.append(active_child)
-            elif active_child is not None and active_child.is_label:
-                active_child.grandchildren.append(content)
-            else:
-                child = _BodyItem(content)
-                current.children.append(child)
-                active_child = child
-            continue
-
-        if current is None:
-            current = _new_default_group()
+                continue
+            current = _BodyGroup(group_text, int(top_match.group(1)))
             groups.append(current)
-
-        if circled_match:
-            content = circled_match.group(1).strip()
-            if active_child is None:
-                active_child = _BodyItem("具体事项", is_label=True)
+            active_child = None
+            for item in inline_items:
+                active_child = _BodyItem(_strip_bullet(item))
                 current.children.append(active_child)
-            active_child.grandchildren.append(content)
-            continue
-
-        if sub_match:
-            content = sub_match.group(2).strip() or "进展内容"
-            if active_child is not None and active_child.is_label:
+        elif sub_match and current is not None and not orphan_root:
+            content = _strip_bullet(sub_match.group(2))
+            if content:
+                active_child = _BodyItem(content, is_label=content.endswith(("：", ":")))
+                current.children.append(active_child)
+        elif circled_match and current is not None and active_child is not None:
+            content = _strip_bullet(circled_match.group(1))
+            if content:
                 active_child.grandchildren.append(content)
-            else:
-                active_child = _BodyItem(content)
-                current.children.append(active_child)
-            continue
-
-        is_label = line.endswith(("：", ":"))
-        if active_child is not None and active_child.is_label and not is_label:
+        elif bullet and current is not None and active_child and active_child.is_label:
             active_child.grandchildren.append(line)
-        else:
-            active_child = _BodyItem(line, is_label=is_label)
+        elif bullet and current is not None and current.text.endswith(("：", ":")):
+            active_child = _BodyItem(line)
             current.children.append(active_child)
-
-    return groups or [_new_default_group()]
+        else:
+            # A trailing colon alone cannot prove the next independent topic is a child.
+            orphan_root = bool(sub_match or circled_match)
+            content = _strip_bullet(sub_match.group(2)) if sub_match else line
+            if circled_match:
+                content = _strip_bullet(circled_match.group(1))
+            current = _BodyGroup(content, len(groups) + 1)
+            groups.append(current)
+            active_child = None
+    return groups
 
 
 def _body_paragraphs(progress: str) -> list[ReportParagraph]:

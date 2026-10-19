@@ -34,7 +34,7 @@ def test_builds_complete_numbered_hierarchy_and_groups_projects() -> None:
     assert "①指标为72.5%。" in texts
 
 
-def test_uses_configurable_section_number_and_wraps_plain_text() -> None:
+def test_uses_configurable_section_number_without_synthetic_body_wrapper() -> None:
     data = WeeklyData(
         month="2026年9月",
         week="第1周",
@@ -47,8 +47,8 @@ def test_uses_configurable_section_number_and_wraps_plain_text() -> None:
     assert "12. 大模型产品研发" in paragraphs
     assert "12.1. 项目甲" in paragraphs
     assert "12.1.1. 事项" in paragraphs
-    assert paragraphs["1、进展内容："] is ParagraphKind.BODY_1
-    assert paragraphs["（1）2026年9月21日同步相关负责人。"] is ParagraphKind.BODY_2
+    assert "1、进展内容：" not in paragraphs
+    assert paragraphs["1、2026年9月21日同步相关负责人。"] is ParagraphKind.BODY_1
 
 
 def test_splits_inline_numbered_items_without_splitting_decimals() -> None:

@@ -42,7 +42,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="内容模式；除 original 外会调用服务端配置的模型",
     )
     parser.add_argument("--model", help="模型名称，必须在服务端允许列表中")
-    parser.add_argument("--custom-instruction", help="custom 模式的补充要求")
+    parser.add_argument("--custom-instruction", help="规范润色的额外要求（可选，原文模式不使用）")
     parser.add_argument(
         "--allow-external",
         action="store_true",

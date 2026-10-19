@@ -73,7 +73,7 @@ def test_original_mode_is_offline_and_requires_no_key(tmp_path: Path) -> None:
     assert all(block.mode == "original" for block in result.blocks)
 
 
-@pytest.mark.parametrize("mode", ["polish", "concise", "expand"])
+@pytest.mark.parametrize("mode", ["polish"])
 def test_llm_modes_preserve_ids_sources_and_facts(tmp_path: Path, mode: str) -> None:
     prepared = _prepared(tmp_path)
     client = FakeClient()
@@ -94,43 +94,33 @@ def test_llm_modes_preserve_ids_sources_and_facts(tmp_path: Path, mode: str) -> 
     assert all(block.mode == mode for block in result.blocks)
 
 
-def test_preset_modes_send_distinct_writing_contracts_and_length_targets(
-    tmp_path: Path,
-) -> None:
-    prepared = _prepared(tmp_path)
-    contracts = {}
-    targets = {}
-
-    for mode in ("polish", "concise", "expand"):
-        client = FakeClient()
-        _service(client).process(prepared, mode)
-        request = json.loads(client.calls[0][0][-1]["content"])
-        contracts[mode] = request["mode_contract"]
-        targets[mode] = request["blocks"][0]["length_target"]
-
-    assert "85%～115%" in contracts["polish"]["length_rule"]
-    assert "50%～75%" in contracts["concise"]["length_rule"]
-    assert "120%～160%" in contracts["expand"]["length_rule"]
-    assert contracts["polish"]["organization"] != contracts["concise"]["organization"]
-    assert contracts["concise"]["required_actions"] != contracts["expand"]["required_actions"]
-    assert targets["concise"]["maximum_chars"] < targets["polish"]["minimum_chars"]
-    assert targets["expand"]["minimum_chars"] > targets["polish"]["maximum_chars"]
-
-
-def test_custom_mode_passes_instruction_and_requires_it(tmp_path: Path) -> None:
+def test_polish_does_not_constrain_length_without_extra_instruction(tmp_path: Path) -> None:
     prepared = _prepared(tmp_path)
     client = FakeClient()
-    service = _service(client)
-
-    result = service.process(prepared, "custom", custom_instruction="按结论和动作整理")
-
+    _service(client).process(prepared, "polish")
     request = json.loads(client.calls[0][0][-1]["content"])
-    assert request["mode_contract"]["custom_instruction"] == "按结论和动作整理"
+    assert "不设置长度比例" in request["mode_contract"]["length_rule"]
     assert "length_target" not in request["blocks"][0]
-    assert all(block.mode == "custom" for block in result.blocks)
+    assert "custom_instruction" not in request["mode_contract"]
 
-    with pytest.raises(ValueError, match="必须填写处理要求"):
-        service.process(prepared, "custom")
+
+@pytest.mark.parametrize("instruction", ["按结论和动作整理", "用正式书面语，分条表述"])
+def test_polish_accepts_optional_extra_instruction(tmp_path: Path, instruction: str) -> None:
+    prepared = _prepared(tmp_path)
+    client = FakeClient()
+    result = _service(client).process(prepared, "polish", custom_instruction=instruction)
+    request = json.loads(client.calls[0][0][-1]["content"])
+    assert request["mode_contract"]["custom_instruction"] == instruction
+    assert "length_target" not in request["blocks"][0]
+    assert all(block.mode == "polish" for block in result.blocks)
+
+
+@pytest.mark.parametrize("mode", ["concise", "expand", "custom"])
+def test_removed_modes_are_rejected(tmp_path: Path, mode: str) -> None:
+    client = FakeClient()
+    with pytest.raises(ValueError, match="不支持"):
+        _service(client).process(_prepared(tmp_path), mode)
+    assert client.calls == []
 
 
 @pytest.mark.parametrize(
@@ -306,7 +296,7 @@ def test_realistic_summary_can_merge_duplicate_metrics_and_normalize_units(
     payload = {"blocks": [{"block_id": block.block_id, "text": generated}]}
 
     result = _service(FakeClient(response=json.dumps(payload, ensure_ascii=False))).process(
-        prepared, "concise"
+        prepared, "polish"
     )
 
     assert result.blocks[0].generated_text == generated
@@ -320,7 +310,7 @@ def test_aggregation_count_is_not_ignored_without_duplicate_source_fact(tmp_path
     payload = {"blocks": [{"block_id": block.block_id, "text": "两项相关性均为0.9。"}]}
 
     result = _service(FakeClient(response=json.dumps(payload, ensure_ascii=False))).process(
-        prepared, "concise"
+        prepared, "polish"
     )
 
     assert result.blocks[0].validation_level == "conflict"
@@ -342,17 +332,19 @@ def test_prompt_exposes_only_editable_text_and_readonly_context(tmp_path: Path) 
         "editable_text",
         "immutable_context",
         "protected_facts",
-        "length_target",
-        "primary_body",
+        "reference_facts",
+        "source_units",
+        "primary_field",
     }
-    assert payload["primary_body"] == [
+    assert "technical_term" in payload["reference_facts"]
+    assert "model_version" in payload["protected_facts"]
+    assert payload["primary_field"] == "content"
+    assert [unit["source_id"] for unit in payload["source_units"]] == list(
+        prepared.blocks[0].source_ids
+    )
+    assert [unit["fields"]["content"] for unit in payload["source_units"]] == [
         row.fields["content"] for row in prepared.sources_for_block(prepared.blocks[0].block_id)
     ]
-    assert set(payload["length_target"]) == {
-        "source_chars",
-        "minimum_chars",
-        "maximum_chars",
-    }
     assert "text" not in payload
     assert payload["editable_text"] == prepared.blocks[0].original_text
     assert payload["immutable_context"] == [{"project": "模型平台"}, {"project": "模型平台"}]
@@ -407,3 +399,22 @@ def test_model_version_change_or_removal_is_rejected(tmp_path: Path, generated: 
     assert result.blocks[0].validation_level == "conflict"
     assert result.blocks[0].effective_text == block.original_text
     assert any("模型与版本" in warning for warning in result.blocks[0].validation_warnings)
+
+
+def test_polish_uses_advisory_candidate_with_warning_instead_of_source_fallback(tmp_path):
+    source = tmp_path / "advisory.csv"
+    source.write_text("项目,本周工作\n平台,使用LightGBM完成评估，AUC 0.81。\n")
+    prepared = prepare_report(source, preset_id="general")[0]
+    block = prepared.blocks[0]
+    candidate = "完成评估，AUC 0.81。"
+    client = FakeClient(
+        response=json.dumps({"blocks": [{"block_id": block.block_id, "text": candidate}]})
+    )
+    processed = _service(client, auto_correct=True).process(prepared, "polish")
+    assert processed.blocks[0].validation_level == "review"
+    assert processed.blocks[0].effective_text == candidate
+    assert processed.blocks[0].effective_version == "generated"
+    assert processed.blocks[0].validation_warnings
+    assert len(client.calls) == 1
+    original = process_report(prepared, "original")
+    assert original.blocks[0].effective_text == block.original_text

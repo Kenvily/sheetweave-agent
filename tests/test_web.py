@@ -58,9 +58,9 @@ def test_web_page_is_simple_and_has_rule_parameters() -> None:
     assert 'name="section_number"' in response.text
     assert 'name="content_mode"' in response.text
     assert 'name="api_key"' not in response.text.lower()
-    assert "规范润色（等长改写）" in response.text
-    assert "精简总结（压缩去重）" in response.text
-    assert "详细整理（结构扩写）" in response.text
+    assert "规范润色（语义分条与表达整理）" in response.text
+    assert "精简总结" not in response.text
+    assert "详细整理" not in response.text
     assert '<option value="original" selected>' in response.text
     assert 'id="custom-instruction-field" class="field" hidden' in response.text
     assert 'contentMode.addEventListener("change", updateCustomInstruction)' in response.text
