@@ -8,11 +8,11 @@ from zipfile import ZipFile
 
 import pytest
 
-from weekly_report_agent.docx_renderer import render_docx
-from weekly_report_agent.models import ParagraphKind, ReportParagraph, ReportPlan
-from weekly_report_agent.numbering import renumber, validate_numbering
-from weekly_report_agent.validator import ReportValidationError, validate_report
-from weekly_report_agent.word_lists import BODY_KINDS, NUMBERING_REL, qn, read_lists
+from sheetweave_agent.docx_renderer import render_docx
+from sheetweave_agent.models import ParagraphKind, ReportParagraph, ReportPlan
+from sheetweave_agent.numbering import renumber, validate_numbering
+from sheetweave_agent.validator import ReportValidationError, validate_report
+from sheetweave_agent.word_lists import BODY_KINDS, NUMBERING_REL, qn, read_lists
 
 TEMPLATE = Path("data/研发三部周报模板-v2.docx")
 
@@ -164,7 +164,7 @@ def test_report_without_body_keeps_usable_body_list_styles(tmp_path):
     definitions = ET.fromstring(content["word/styles.xml"])
     numbers = ET.fromstring(content["word/numbering.xml"])
     ids = {n.get(qn("numId")) for n in numbers.findall(qn("num"))}
-    styles = [n for n in definitions if n.get(qn("styleId"), "").startswith("DocAgentBody")]
+    styles = [n for n in definitions if n.get(qn("styleId"), "").startswith("SheetWeaveBody")]
     assert len(styles) == 3
     assert all(
         n.find(f"{qn('pPr')}/{qn('numPr')}/{qn('numId')}").get(qn("val")) in ids for n in styles
@@ -173,7 +173,7 @@ def test_report_without_body_keeps_usable_body_list_styles(tmp_path):
 
 @pytest.mark.parametrize("choice", [0, 1, 2])
 def test_native_lists_honor_all_scheme_body_number_formats(tmp_path, choice):
-    from weekly_report_agent.numbering import CHOICES
+    from sheetweave_agent.numbering import CHOICES
 
     numbering = validate_numbering({kind.value: CHOICES[kind.value][choice] for kind in BODY_KINDS})
     expected = renumber(plan(), numbering)

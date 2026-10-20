@@ -5,7 +5,7 @@ import json
 
 import pytest
 
-from weekly_report_agent.llm import LLMConfig, OpenAICompatibleClient, load_llm_config
+from sheetweave_agent.llm import LLMConfig, OpenAICompatibleClient, load_llm_config
 
 
 def test_generic_settings_override_legacy_without_exposing_key():

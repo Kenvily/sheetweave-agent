@@ -8,11 +8,11 @@ from threading import Event, Thread
 
 import pytest
 
-from weekly_report_agent.llm import LLMClientError, LLMConfig, LLMService
-from weekly_report_agent.task_queue import QueueFullError, TaskCancelled, TaskQueue
-from weekly_report_agent.task_worker import TaskRunner
-from weekly_report_agent.web import create_app
-from weekly_report_agent.web_sessions import SnapshotStore
+from sheetweave_agent.llm import LLMClientError, LLMConfig, LLMService
+from sheetweave_agent.task_queue import QueueFullError, TaskCancelled, TaskQueue
+from sheetweave_agent.task_worker import TaskRunner
+from sheetweave_agent.web import create_app
+from sheetweave_agent.web_sessions import SnapshotStore
 
 pytestmark = pytest.mark.usefixtures("saved_generation_profiles")
 

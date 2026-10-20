@@ -7,11 +7,11 @@ from pathlib import Path
 
 import pytest
 
-from weekly_report_agent.input_parser import parse_input
-from weekly_report_agent.llm import ContentMode, LLMConfig, LLMService
-from weekly_report_agent.rules import RulePresetError, load_rule_preset, validate_rule_preset
-from weekly_report_agent.service import generate_report, prepare_report, process_report
-from weekly_report_agent.web import create_app
+from sheetweave_agent.input_parser import parse_input
+from sheetweave_agent.llm import ContentMode, LLMConfig, LLMService
+from sheetweave_agent.rules import RulePresetError, load_rule_preset, validate_rule_preset
+from sheetweave_agent.service import generate_report, prepare_report, process_report
+from sheetweave_agent.web import create_app
 
 pytestmark = pytest.mark.usefixtures("saved_generation_profiles")
 

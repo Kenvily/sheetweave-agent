@@ -725,7 +725,7 @@ h2 { line-height: 1.45; }
 .field-heading a { font-weight: 500; font-size: .875rem; }
 .form-section:nth-of-type(2) .step-number { background: var(--warm-soft); color: var(--warm-ink); }
 .form-section:nth-of-type(3) .step-number { background: #fff6ce; color: #695314; }
-.input-grid { grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr); }
+.input-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 .upload-field { padding: 0; }
 .upload-field input { background: var(--surface-soft); min-height: 48px; }
 .actions { flex-wrap: wrap; align-items: center; padding-top: 20px; border-top: 1px solid var(--line); }

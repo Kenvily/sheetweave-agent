@@ -23,7 +23,7 @@ python -m pip install -r requirements.txt
 python -m pytest
 ruff check .
 ruff format --check .
-python -m weekly_report_agent --input data/周报.csv --template data/研发三部周报模板.docx
+python -m sheetweave_agent --input data/周报.csv --template data/研发三部周报模板.docx
 ```
 
 ## Coding Style & Naming Conventions

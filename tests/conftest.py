@@ -23,8 +23,8 @@ def saved_generation_profiles(isolate_default_web_state):
     """Create saved schemes explicitly for generation tests; no production built-ins."""
     import json
 
-    from weekly_report_agent.profiles import ProfileStore
-    from weekly_report_agent.rules import load_rule_preset, preset_payload
+    from sheetweave_agent.profiles import ProfileStore
+    from sheetweave_agent.rules import load_rule_preset, preset_payload
 
     root = Path(__file__).resolve().parents[1]
     template = root / "data/研发三部周报模板-v2.docx"

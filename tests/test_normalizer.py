@@ -2,7 +2,7 @@ from datetime import date
 
 import pytest
 
-from weekly_report_agent.normalizer import normalize_report_text
+from sheetweave_agent.normalizer import normalize_report_text
 
 
 def test_normalizes_terms_names_and_weekdays_without_changing_metrics() -> None:

@@ -1,6 +1,6 @@
 import pytest
 
-from weekly_report_agent.llm.validation import ValidationLevel, validate_generated_text
+from sheetweave_agent.llm.validation import ValidationLevel, validate_generated_text
 
 
 @pytest.mark.parametrize(

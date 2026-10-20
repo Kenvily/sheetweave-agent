@@ -2,8 +2,8 @@ from datetime import date
 
 import pytest
 
-from weekly_report_agent.models import ParagraphKind, WeeklyData, WeeklyItem
-from weekly_report_agent.planner import build_report_plan
+from sheetweave_agent.models import ParagraphKind, WeeklyData, WeeklyItem
+from sheetweave_agent.planner import build_report_plan
 
 
 def test_builds_complete_numbered_hierarchy_and_groups_projects() -> None:

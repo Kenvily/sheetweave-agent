@@ -5,9 +5,9 @@ from pathlib import Path
 import pytest
 from openpyxl import Workbook
 
-from weekly_report_agent.csv_parser import CsvFormatError, load_weekly_data, parse_weekly_data
-from weekly_report_agent.input_parser import InputFormatError, parse_input
-from weekly_report_agent.rules import load_rule_preset
+from sheetweave_agent.csv_parser import CsvFormatError, load_weekly_data, parse_weekly_data
+from sheetweave_agent.input_parser import InputFormatError, parse_input
+from sheetweave_agent.rules import load_rule_preset
 
 
 def test_selects_latest_nonempty_week_and_skips_empty_rows() -> None:

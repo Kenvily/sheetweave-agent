@@ -7,12 +7,12 @@ from xml.etree import ElementTree as ET
 
 import pytest
 
-from weekly_report_agent.docx_renderer import WORD_NS
-from weekly_report_agent.docx_security import DocxSecurityError, inspect_docx_package
-from weekly_report_agent.pdf_preview import PdfPreviewError
-from weekly_report_agent.validator import ReportValidationError, validate_report
-from weekly_report_agent.web import DOCX_MIME_TYPE, create_app
-from weekly_report_agent.web_sessions import SessionConflictError, SnapshotStore
+from sheetweave_agent.docx_renderer import WORD_NS
+from sheetweave_agent.docx_security import DocxSecurityError, inspect_docx_package
+from sheetweave_agent.pdf_preview import PdfPreviewError
+from sheetweave_agent.validator import ReportValidationError, validate_report
+from sheetweave_agent.web import DOCX_MIME_TYPE, create_app
+from sheetweave_agent.web_sessions import SessionConflictError, SnapshotStore
 
 pytestmark = pytest.mark.usefixtures("saved_generation_profiles")
 

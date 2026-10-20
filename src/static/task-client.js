@@ -1,9 +1,20 @@
 /* Short polling releases Web request threads between progress updates. */
 (() => {
-  const key = () => 'docAgent.pending:' + location.pathname;
-  const read = () => { try { return JSON.parse(sessionStorage.getItem(key()) || 'null'); } catch (_error) { return null; } };
+  const key = () => 'SheetWeaveAgent.pending:' + location.pathname;
+  const legacyKey = () => 'docAgent.pending:' + location.pathname;
+  const read = () => {
+    try {
+      const saved = sessionStorage.getItem(key()) || sessionStorage.getItem(legacyKey());
+      const task = JSON.parse(saved || 'null');
+      if (task) {
+        sessionStorage.setItem(key(), JSON.stringify(task));
+        sessionStorage.removeItem(legacyKey());
+      }
+      return task;
+    } catch (_error) { return null; }
+  };
   const remember = task => { try { sessionStorage.setItem(key(), JSON.stringify(task)); } catch (_error) {} };
-  const forget = () => { try { sessionStorage.removeItem(key()); } catch (_error) {} };
+  const forget = () => { try { sessionStorage.removeItem(key()); sessionStorage.removeItem(legacyKey()); } catch (_error) {} };
   window.pendingReportTask = read;
   window.runQueuedReport = async ({form, url, signal, intent = 'preview', resume = false, onProgress, onComplete}) => {
     let task = resume ? read() : null;

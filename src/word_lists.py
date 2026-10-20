@@ -105,10 +105,13 @@ def _append_family(
     names = {n.get(qn("val")) for n in definitions.findall(f"{qn('style')}/{qn('name')}")}
     body_styles = {}
     for level, kind in enumerate(BODY_KINDS):
-        sid, name, suffix = f"DocAgentBody{level + 1}", f"docAgent 正文 {level + 1}", 1
+        sid, name, suffix = f"SheetWeaveBody{level + 1}", f"SheetWeaveAgent 正文 {level + 1}", 1
         while sid in ids or name in names:
             suffix += 1
-            sid, name = f"DocAgentBody{level + 1}_{suffix}", f"docAgent 正文 {level + 1} ({suffix})"
+            sid, name = (
+                f"SheetWeaveBody{level + 1}_{suffix}",
+                f"SheetWeaveAgent 正文 {level + 1} ({suffix})",
+            )
         body_styles[kind] = sid
         node = ET.SubElement(
             definitions,

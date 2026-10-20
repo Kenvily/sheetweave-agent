@@ -6,7 +6,7 @@ from threading import Barrier
 
 import pytest
 
-from weekly_report_agent.llm import (
+from sheetweave_agent.llm import (
     ContentMode,
     LLMConfig,
     LLMConfigurationError,
@@ -14,7 +14,7 @@ from weekly_report_agent.llm import (
     LLMService,
     load_llm_config,
 )
-from weekly_report_agent.service import prepare_report, process_report
+from sheetweave_agent.service import prepare_report, process_report
 
 
 class FakeClient:

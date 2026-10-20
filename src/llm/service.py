@@ -8,8 +8,8 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, replace
 from enum import Enum
 
-from weekly_report_agent.models import ContentBlock, PreparedReport
-from weekly_report_agent.timing import TimingRecorder, measure
+from sheetweave_agent.models import ContentBlock, PreparedReport
+from sheetweave_agent.timing import TimingRecorder, measure
 
 from .client import LLMClient, OpenAICompatibleClient
 from .config import LLMConfig

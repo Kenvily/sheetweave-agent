@@ -8,7 +8,7 @@ import time
 
 import pytest
 
-from weekly_report_agent.server import load_environment
+from sheetweave_agent.server import load_environment
 
 
 def test_env_loader_does_not_execute_values_or_expose_bad_lines(tmp_path, monkeypatch):
@@ -49,7 +49,7 @@ def _launch(tmp_path, *, fail_web=False, exit_worker=False):
     script = tmp_path / "launcher.py"
     script.write_text(
         "import os,sys\nfrom pathlib import Path\n"
-        "from weekly_report_agent.server import run_services\n"
+        "from sheetweave_agent.server import run_services\n"
         f"root=Path({str(tmp_path)!r})\n"
         "raise SystemExit(run_services([sys.executable,str(root/'web.py')],"
         "[sys.executable,str(root/'worker.py')],cwd=root,environ=dict(os.environ),"

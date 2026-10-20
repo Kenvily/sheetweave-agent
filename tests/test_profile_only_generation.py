@@ -5,10 +5,10 @@ from pathlib import Path
 
 import pytest
 
-from weekly_report_agent.cli import main
-from weekly_report_agent.rules import RulePresetError, list_rule_presets, load_rule_preset
-from weekly_report_agent.service import prepare_report
-from weekly_report_agent.web import create_app
+from sheetweave_agent.cli import main
+from sheetweave_agent.rules import RulePresetError, list_rule_presets, load_rule_preset
+from sheetweave_agent.service import prepare_report
+from sheetweave_agent.web import create_app
 
 
 def test_empty_library_directs_user_to_adaptation_and_disables_generation():
@@ -57,9 +57,9 @@ def test_cli_and_internal_service_have_no_implicit_rule(capsys, tmp_path):
 def test_retired_rule_still_renders_existing_frozen_snapshot(tmp_path):
     from datetime import date
 
-    from weekly_report_agent.rules import preset_payload
-    from weekly_report_agent.service import render_prepared_report
-    from weekly_report_agent.web_sessions import session_preset
+    from sheetweave_agent.rules import preset_payload
+    from sheetweave_agent.service import render_prepared_report
+    from sheetweave_agent.web_sessions import session_preset
 
     root = Path(__file__).resolve().parents[1]
     preset = load_rule_preset("rd3", root / "tests/fixtures/rules")

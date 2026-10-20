@@ -1,6 +1,8 @@
-# docAgent · 周报生成 Agent
+# SheetWeaveAgent
 
-Python 3.11+ 周报整理工具：CSV/XLSX → 规则与字段映射 → IR → 可选 LLM → 事实校验与回退 → DOCX。编号、术语规范化和文档格式由确定性规则处理，LLM 只整理允许改写的内容。
+仓库及安装包名：`sheetweave-agent`；Python 包名：`sheetweave_agent`。
+
+Python 3.11+ 表格成文工具，以周报为当前主要使用场景：CSV/XLSX → 规则与字段映射 → IR → 可选 LLM → 事实校验与回退 → DOCX。编号、术语规范化和文档格式由确定性规则处理，LLM 只整理允许改写的内容。
 
 ## 功能
 
@@ -20,14 +22,29 @@ Python 3.11+ 周报整理工具：CSV/XLSX → 规则与字段映射 → IR → 
 ```bash
 conda create -n py31115 python=3.11 pip -y  # 仅环境不存在时执行
 conda activate py31115
-cd ~/docAgent                           # 改为实际项目路径
+cd ~/SheetWeaveAgent                           # 改为实际项目路径
 python -m pip install -r requirements.txt
 
 test -f .env || cp .env.example .env
 chmod 600 .env
 ```
 
-安装方式为 editable；源码在 `src/`，逻辑包名仍是 `weekly_report_agent`，不要直接执行 `python src/web.py`。运行/开发依赖以 `pyproject.toml` 和 `requirements.txt` 为准。
+### 从旧项目名迁移
+
+停止旧 Web/Worker 后，在项目目录执行：
+
+```bash
+conda activate py31115
+python -m pip uninstall weekly-report-agent
+python -m pip install -r requirements.txt
+python -m sheetweave_agent.server --host 127.0.0.1 --port 18988
+```
+
+后续统一使用 `sheetweave_agent` 包和 `sheetweave-agent`、`sheetweave-web`、`sheetweave-worker`、`sheetweave-server` 命令，旧 Python 入口已移除。`var/` 中的方案、任务和统计无需迁移或重建。现有环境变量继续有效，默认临时快照目录沿用旧名以保留现有审核会话。
+
+仓库及安装包名为 `sheetweave-agent`，本地目录可使用 `SheetWeaveAgent`（上方示例）或自定义路径。目录更名需先停止服务，在父目录执行重命名、重新打开工作区并重新执行 editable 安装；不要在服务运行中移动目录。
+
+安装方式为 editable；源码在 `src/`，逻辑包名为 `sheetweave_agent`，不要直接执行 `python src/web.py`。运行/开发依赖以 `pyproject.toml` 和 `requirements.txt` 为准。
 
 编辑 `.env`，模型模式需要 `LLM_API_KEY`；Base URL、模型允许列表和其他选项参考 `.env.example`。密钥只在服务端读取，不写入 Git。部署方需确认内容外发授权；CLI 模型模式要求 `--allow-external`，Web 单块重生成保留外发确认。
 
@@ -39,8 +56,8 @@ chmod 600 .env
 
 ```bash
 conda activate py31115
-cd ~/docAgent
-python -m weekly_report_agent.server --host 127.0.0.1 --port 18988
+cd ~/SheetWeaveAgent
+python -m sheetweave_agent.server --host 127.0.0.1 --port 18988
 ```
 
 此入口同时管理 **Web 服务和独立任务 Worker**，并不是把任务放回 Web 线程。默认 Web 为 2 个 gthread 进程、每进程最多 2 个请求线程；后台任务并发仍由 `TASK_MAX_CONCURRENCY` 控制。两端使用相同 Python、项目目录及配置，日志直接显示在当前终端。
@@ -54,12 +71,12 @@ python -m weekly_report_agent.server --host 127.0.0.1 --port 18988
 其他启动选项：
 
 ```bash
-python -m weekly_report_agent.server --env-file /绝对路径/配置.env
-python -m weekly_report_agent.server --no-env  # 仅使用终端已有环境变量
-python -m weekly_report_agent.server --workers 2 --threads 2 --port 18989
+python -m sheetweave_agent.server --env-file /绝对路径/配置.env
+python -m sheetweave_agent.server --no-env  # 仅使用终端已有环境变量
+python -m sheetweave_agent.server --workers 2 --threads 2 --port 18989
 ```
 
-重新安装项目后也可使用 `weekly-report-server`。若配置需要 shell 变量展开，先在当前终端加载配置，再用 `--no-env`。
+重新安装项目后也可使用 `sheetweave-server`。若配置需要 shell 变量展开，先在当前终端加载配置，再用 `--no-env`。
 
 ### 分开管理（可选）
 
@@ -68,9 +85,9 @@ python -m weekly_report_agent.server --workers 2 --threads 2 --port 18989
 ```bash
 # Web
 gunicorn --config gunicorn.conf.py --workers 2 --worker-class gthread --threads 2 \
-  --bind 127.0.0.1:18989 'weekly_report_agent.web:create_app()'
+  --bind 127.0.0.1:18989 'sheetweave_agent.web:create_app()'
 # 独立任务 Worker（另一个终端或进程管理器单独运行）
-python -m weekly_report_agent.task_worker
+python -m sheetweave_agent.task_worker
 ```
 
 单独启动 Gunicorn 不会执行排队任务，原文模式也需要任务 Worker。CLI 不依赖任务 Worker。
@@ -101,7 +118,7 @@ Web 与后台 Worker 必须连接同一任务数据库，使用同一任务文�
 
 规范润色的检查按风险分级：术语提及、无单位数字的未配对增删作为提示，候选可直接采用并保留告警；关键事实变化及明确替换仍回退原文。提示不是事实正确性的保证，导出前仍应核对。正文三级 `①` 的首行缩进在二级基础上增加 2 字符，默认二级 2、三级 4，HTML 与 DOCX 同步。
 
-下载的 DOCX 使用 Word 原生三级多级列表（默认 `1、→（1）→①`），正文不再重复写入文本编号。每个目录独立保存列表定义、编号实例及三级正文样式（“docAgent 正文 1／2／3”，同名样式增加后缀），避免样式重新应用时关联到其他目录的编号；新的父项重置子级编号，新的目录重置整组编号。在 Word 中可续号、调整列表级别及修改当前列表格式。Tab／Shift+Tab 升降级取决于 Word 的列表编辑设置，也可使用“更改列表级别”菜单。若要为 `①` 增加间隔，在当前列表第 3 级设置“编号之后：空格”，保留起始编号与重启规则；同一列表的三级条目会同步调整间隔。PDF 由同一 DOCX 转换，保留编号与缩进。已有报告不会自动更新，需重新生成。
+下载的 DOCX 使用 Word 原生三级多级列表（默认 `1、→（1）→①`），正文不再重复写入文本编号。每个目录独立保存列表定义、编号实例及三级正文样式（“SheetWeaveAgent 正文 1／2／3”，同名样式增加后缀），避免样式重新应用时关联到其他目录的编号；新的父项重置子级编号，新的目录重置整组编号。在 Word 中可续号、调整列表级别及修改当前列表格式。Tab／Shift+Tab 升降级取决于 Word 的列表编辑设置，也可使用“更改列表级别”菜单。若要为 `①` 增加间隔，在当前列表第 3 级设置“编号之后：空格”，保留起始编号与重启规则；同一列表的三级条目会同步调整间隔。PDF 由同一 DOCX 转换，保留编号与缩进。已有报告不会自动更新，需重新生成。
 
 “当前内容”和 HTML 正文显示用于导出的规范化、标点与编号结果。模型候选存在关键事实冲突时默认回退原文，核对后可谨慎采用；人工编辑以当前采用内容为基准，通过独立修改 Diff 确认后生效。新建周报等待完整模型响应后校验，再进入审核；生成期间仅显示进度，不逐片展示正文。
 
@@ -112,13 +129,13 @@ Web 与后台 Worker 必须连接同一任务数据库，使用同一任务文�
 CLI 不依赖后台 Worker，默认原文模式，必须使用已保存方案（模板随方案读取）：
 
 ```bash
-python -m weekly_report_agent \
+python -m sheetweave_agent \
   --input data/周报-v1.csv \
   --profile p_实际方案ID \
   --output outputs/周报.docx
 ```
 
-模型模式增加 `--content-mode polish --model <允许的模型> --allow-external`；规范润色可增加 `--custom-instruction '整理要求'`。其他参数用 `python -m weekly_report_agent --help` 查看。
+模型模式增加 `--content-mode polish --model <允许的模型> --allow-external`；规范润色可增加 `--custom-instruction '整理要求'`。其他参数用 `python -m sheetweave_agent --help` 查看。
 
 ## M6：适配并复用报告方案
 
@@ -145,7 +162,7 @@ python -m weekly_report_agent \
 CLI 可复用已保存方案（不需要再次传模板）：
 
 ```bash
-python -m weekly_report_agent --profile p_实际方案ID --input 新周报.xlsx --output outputs/周报.docx
+python -m sheetweave_agent --profile p_实际方案ID --input 新周报.xlsx --output outputs/周报.docx
 ```
 
 管理员查询最近**实际提交时间**、成功时间和使用次数，按需确认删除：

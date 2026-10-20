@@ -5,11 +5,11 @@ from xml.etree import ElementTree as ET
 
 import pytest
 
-from weekly_report_agent.docx_renderer import FONT_SETTINGS, WORD_NS, render_docx
-from weekly_report_agent.models import ParagraphKind, WeeklyData, WeeklyItem
-from weekly_report_agent.planner import build_report_plan
-from weekly_report_agent.validator import validate_report
-from weekly_report_agent.word_lists import read_lists
+from sheetweave_agent.docx_renderer import FONT_SETTINGS, WORD_NS, render_docx
+from sheetweave_agent.models import ParagraphKind, WeeklyData, WeeklyItem
+from sheetweave_agent.planner import build_report_plan
+from sheetweave_agent.validator import validate_report
+from sheetweave_agent.word_lists import read_lists
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -117,7 +117,7 @@ def test_heading_styles_define_navigation_levels_without_replacing_template_styl
             )
         elif planned.kind.value.startswith("body_"):
             reference = properties.find(_qn("pStyle")).get(_qn("val"))
-            assert reference.startswith("DocAgentBody")
+            assert reference.startswith("SheetWeaveBody")
             assert reference not in {
                 node.get(_qn("styleId")) for node in previous_styles.findall(_qn("style"))
             }
@@ -129,7 +129,7 @@ def test_heading_styles_define_navigation_levels_without_replacing_template_styl
 def test_validator_rejects_heading_with_visual_format_but_no_outline(tmp_path):
     import pytest
 
-    from weekly_report_agent.validator import ReportValidationError
+    from sheetweave_agent.validator import ReportValidationError
 
     data = WeeklyData(
         "2026年9月", "第1周", (WeeklyItem("合成项目", "合成任务", "进行中", "完成验证"),)
@@ -155,7 +155,7 @@ def test_validator_rejects_heading_with_visual_format_but_no_outline(tmp_path):
                 elif info.filename == "word/styles.xml" and fault == "missing_definition":
                     root = ET.fromstring(payload)
                     for node in list(root):
-                        if node.get(_qn("styleId")) == "DocAgentHeading1":
+                        if node.get(_qn("styleId")) == "SheetWeaveHeading1":
                             root.remove(node)
                     payload = ET.tostring(root)
                 target.writestr(info, payload)
@@ -166,8 +166,8 @@ def test_validator_rejects_heading_with_visual_format_but_no_outline(tmp_path):
 def test_third_body_indent_is_relative_to_second_even_for_existing_profiles(tmp_path):
     import pytest
 
-    from weekly_report_agent.document_style import default_styles
-    from weekly_report_agent.validator import ReportValidationError
+    from sheetweave_agent.document_style import default_styles
+    from sheetweave_agent.validator import ReportValidationError
 
     styles = default_styles()
     styles["body_2"]["first_line_chars"] = 3
@@ -199,7 +199,7 @@ def test_third_body_indent_is_relative_to_second_even_for_existing_profiles(tmp_
 
 @pytest.mark.parametrize("second,third,expected", [(2, 2, 4), (3, 2, 5), (10, 2, 12), (2, 6, 6)])
 def test_saved_style_contract_normalizes_third_indent_idempotently(second, third, expected):
-    from weekly_report_agent.document_style import validate_styles
+    from sheetweave_agent.document_style import validate_styles
 
     styles = validate_styles(
         {"body_2": {"first_line_chars": second}, "body_3": {"first_line_chars": third}}

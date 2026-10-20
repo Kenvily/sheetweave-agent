@@ -1,4 +1,4 @@
-"""Allow execution with ``python -m weekly_report_agent``."""
+"""Allow execution with ``python -m sheetweave_agent``."""
 
 from .cli import main
 

@@ -5,8 +5,8 @@ from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
-from weekly_report_agent.llm import LLMConfig, OpenAICompatibleClient
-from weekly_report_agent.timing import TimingRecorder
+from sheetweave_agent.llm import LLMConfig, OpenAICompatibleClient
+from sheetweave_agent.timing import TimingRecorder
 
 
 def test_timing_keeps_failed_events_and_returns_detached_snapshots() -> None:
@@ -50,7 +50,7 @@ def test_http_retry_timing_counts_attempts_without_recording_content(monkeypatch
         )
 
     monkeypatch.setattr("urllib.request.urlopen", urlopen)
-    monkeypatch.setattr("weekly_report_agent.llm.client.time.sleep", lambda _delay: None)
+    monkeypatch.setattr("sheetweave_agent.llm.client.time.sleep", lambda _delay: None)
     client = OpenAICompatibleClient(LLMConfig(api_key="private-secret"), timings=recorder)
     assert client.complete([{"role": "user", "content": "private prompt"}], "model") == (
         "private response"

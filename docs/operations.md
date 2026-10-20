@@ -1,4 +1,4 @@
-# docAgent 运维说明
+# SheetWeaveAgent 运维说明
 
 单终端统一启动及可选分开管理方式见 [README](../README.md#部署单终端启动)。本文说明排查和数据边界，架构见 [项目介绍](project-overview.md)。
 
@@ -9,10 +9,10 @@
 先检查后台进程并查看其终端/进程管理器日志：
 
 ```bash
-pgrep -af 'weekly_report_agent.task_worker'
+pgrep -af 'sheetweave_agent.task_worker'
 ```
 
-没有进程时，若使用统一入口，检查其退出错误后重新启动；若分开管理，启动 `python -m weekly_report_agent.task_worker`，已有任务会自动领取。已有进程却不处理时，确认两端使用同一 Python、项目安装和 `.env`。分开管理时，在两个终端各执行以下检查；统一入口自动为两端传入相同环境。检查不输出密钥、不创建数据库：
+没有进程时，若使用统一入口，检查其退出错误后重新启动；若分开管理，启动 `python -m sheetweave_agent.task_worker`，已有任务会自动领取。已有进程却不处理时，确认两端使用同一 Python、项目安装和 `.env`。分开管理时，在两个终端各执行以下检查；统一入口自动为两端传入相同环境。检查不输出密钥、不创建数据库：
 
 ```bash
 which python
@@ -21,7 +21,7 @@ python - <<'PY'
 import os
 import tempfile
 from pathlib import Path
-import weekly_report_agent.task_queue as module
+import sheetweave_agent.task_queue as module
 
 root = Path(module.__file__).resolve().parents[1]
 print("项目:", root)

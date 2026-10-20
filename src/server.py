@@ -176,9 +176,9 @@ def main() -> int:
         "-",
         "--error-logfile",
         "-",
-        "weekly_report_agent.web:create_app()",
+        "sheetweave_agent.web:create_app()",
     ]
-    worker = [sys.executable, "-m", "weekly_report_agent.task_worker"]
+    worker = [sys.executable, "-m", "sheetweave_agent.task_worker"]
     return run_services(
         web, worker, cwd=ROOT, environ=environ, ready=lambda: web_ready(host, args.port)
     )

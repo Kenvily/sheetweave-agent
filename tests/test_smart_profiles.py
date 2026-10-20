@@ -8,20 +8,20 @@ from pathlib import Path
 import pytest
 from openpyxl import Workbook
 
-from weekly_report_agent.adaptation import (
+from sheetweave_agent.adaptation import (
     inspect_table,
     inspect_template,
     propose_rule,
     suggest_profile,
     validate_requested_outline,
 )
-from weekly_report_agent.llm import LLMConfig, LLMService
-from weekly_report_agent.models import ParagraphKind
-from weekly_report_agent.numbering import validate_numbering
-from weekly_report_agent.rules import validate_rule_preset
-from weekly_report_agent.service import prepare_report, render_prepared_report
-from weekly_report_agent.task_worker import TaskRunner
-from weekly_report_agent.web import create_app
+from sheetweave_agent.llm import LLMConfig, LLMService
+from sheetweave_agent.models import ParagraphKind
+from sheetweave_agent.numbering import validate_numbering
+from sheetweave_agent.rules import validate_rule_preset
+from sheetweave_agent.service import prepare_report, render_prepared_report
+from sheetweave_agent.task_worker import TaskRunner
+from sheetweave_agent.web import create_app
 
 TEMPLATE = Path("data/研发三部周报模板-v2.docx")
 CSV = (

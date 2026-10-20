@@ -6,8 +6,8 @@ from pathlib import Path
 
 import pytest
 
-from weekly_report_agent.llm import LLMConfig, LLMService
-from weekly_report_agent.web import DOCX_MIME_TYPE, create_app
+from sheetweave_agent.llm import LLMConfig, LLMService
+from sheetweave_agent.web import DOCX_MIME_TYPE, create_app
 
 pytestmark = pytest.mark.usefixtures("saved_generation_profiles")
 
@@ -41,7 +41,7 @@ def _client(fake: WebFakeClient, tmp_path: Path | None = None):
         LLMConfig(api_key="test-key", allowed_models=("deepseek-chat",)),
         fake,
     )
-    from weekly_report_agent.web_sessions import SnapshotStore
+    from sheetweave_agent.web_sessions import SnapshotStore
 
     store = SnapshotStore(tmp_path / "snapshots") if tmp_path is not None else None
     app = create_app(ROOT / "data/研发三部周报模板-v2.docx", service, store)
@@ -182,7 +182,7 @@ def test_conflicting_candidate_is_explained_and_excluded_from_snapshot(tmp_path:
 
 @pytest.mark.parametrize("route", ["/preview", "/tasks"])
 def test_polish_extra_requirements_reach_generation_and_regeneration(tmp_path, route):
-    from weekly_report_agent.task_worker import TaskRunner
+    from sheetweave_agent.task_worker import TaskRunner
 
     class CapturingClient(WebFakeClient):
         def __init__(self):

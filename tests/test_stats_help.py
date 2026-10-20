@@ -8,10 +8,10 @@ from zoneinfo import ZoneInfo
 import pytest
 from openpyxl import load_workbook
 
-from weekly_report_agent import stats as stats_module
-from weekly_report_agent.stats import UsageMetrics, UsageStats
-from weekly_report_agent.web import DOCX_MIME_TYPE, create_app
-from weekly_report_agent.web_sessions import SnapshotStore
+from sheetweave_agent import stats as stats_module
+from sheetweave_agent.stats import UsageMetrics, UsageStats
+from sheetweave_agent.web import DOCX_MIME_TYPE, create_app
+from sheetweave_agent.web_sessions import SnapshotStore
 
 pytestmark = pytest.mark.usefixtures("saved_generation_profiles")
 

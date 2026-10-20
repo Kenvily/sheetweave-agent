@@ -13,9 +13,9 @@ from collections import Counter
 from datetime import date
 from pathlib import Path
 
-from weekly_report_agent.llm import LLMConfig, LLMService, OpenAICompatibleClient, load_llm_config
-from weekly_report_agent.service import prepare_report, process_report, render_prepared_report
-from weekly_report_agent.timing import TimingRecorder
+from sheetweave_agent.llm import LLMConfig, LLMService, OpenAICompatibleClient, load_llm_config
+from sheetweave_agent.service import prepare_report, process_report, render_prepared_report
+from sheetweave_agent.timing import TimingRecorder
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -106,7 +106,7 @@ def main() -> int:
             parser.error("max-batch-chars 必须大于 0。")
         config = replace(config, max_batch_chars=args.max_batch_chars)
     results = []
-    with tempfile.TemporaryDirectory(prefix="docagent-timing-") as directory:
+    with tempfile.TemporaryDirectory(prefix="sheetweave-timing-") as directory:
         work = Path(directory)
         source = work / "synthetic.csv"
         with source.open("w", newline="") as stream:

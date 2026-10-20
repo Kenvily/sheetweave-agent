@@ -1,4 +1,4 @@
-from weekly_report_agent.llm.facts import FactKind, extract_facts
+from sheetweave_agent.llm.facts import FactKind, extract_facts
 
 
 def _facts(text: str, kind: FactKind):
@@ -17,7 +17,7 @@ def test_model_version_normalizes_spacing_case_and_version_marker() -> None:
 
 
 def test_normalizer_model_aliases_keep_fact_identity():
-    from weekly_report_agent.normalizer import normalize_report_text
+    from sheetweave_agent.normalizer import normalize_report_text
 
     for source in ("lgbm 4.5", "xgb 2.1", "使用lgbm和xgb验证，AUC 0.81。"):
         assert [f.identity for f in extract_facts(source)] == [

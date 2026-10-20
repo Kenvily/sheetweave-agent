@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from weekly_report_agent.cli import main
+from sheetweave_agent.cli import main
 
 pytestmark = pytest.mark.usefixtures("saved_generation_profiles")
 

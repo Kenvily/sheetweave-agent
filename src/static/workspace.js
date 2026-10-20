@@ -58,10 +58,10 @@
     if (block) activateBlock(block, true);
   }));
 
-  const storageKey = 'docAgent.review.reader';
+  const storageKey = 'SheetWeaveAgent.review.reader';
   let preferences = {};
   try {
-    const saved = JSON.parse(localStorage.getItem(storageKey) || '{}');
+    const saved = JSON.parse(localStorage.getItem(storageKey) || localStorage.getItem('docAgent.review.reader') || '{}');
     if (saved && typeof saved === 'object' && !Array.isArray(saved)) preferences = saved;
   } catch (_error) { /* Reading preferences is optional. */ }
   const save = () => { try { localStorage.setItem(storageKey, JSON.stringify(preferences)); } catch (_error) {} };

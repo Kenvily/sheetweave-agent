@@ -5,10 +5,10 @@ from threading import Event
 
 import pytest
 
-from weekly_report_agent.llm import LLMClientError, LLMConfig, LLMService, OpenAICompatibleClient
-from weekly_report_agent.web import create_app
-from weekly_report_agent.web_sessions import SnapshotStore
-from weekly_report_agent.web_stream import GenerationCancelled, stream_events
+from sheetweave_agent.llm import LLMClientError, LLMConfig, LLMService, OpenAICompatibleClient
+from sheetweave_agent.web import create_app
+from sheetweave_agent.web_sessions import SnapshotStore
+from sheetweave_agent.web_stream import GenerationCancelled, stream_events
 
 pytestmark = pytest.mark.usefixtures("saved_generation_profiles")
 
@@ -67,7 +67,7 @@ def test_stream_retries_transport_failure_only_before_output(monkeypatch) -> Non
         return io.BytesIO(_packet("complete", "stop"))
 
     monkeypatch.setattr("urllib.request.urlopen", open_response)
-    monkeypatch.setattr("weekly_report_agent.llm.client.time.sleep", lambda _delay: None)
+    monkeypatch.setattr("sheetweave_agent.llm.client.time.sleep", lambda _delay: None)
     assert list(OpenAICompatibleClient(LLMConfig(api_key="test-only")).stream([], "model")) == [
         "complete"
     ]

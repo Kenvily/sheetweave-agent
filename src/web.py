@@ -976,7 +976,7 @@ def create_app(
             section_number = _parse_section_number(request.form.get("section_number", ""), preset)
             mode, instruction, model = process_options()
 
-            with tempfile.TemporaryDirectory(prefix="weekly-report-web-") as directory:
+            with tempfile.TemporaryDirectory(prefix="sheetweave-web-") as directory:
                 workdir = Path(directory)
                 input_path = save_input(upload, workdir)
                 output_path = workdir / "report.docx"

@@ -3,8 +3,8 @@ from pathlib import Path
 
 import pytest
 
-from weekly_report_agent.rules import RulePresetError, load_rule_preset, validate_rule_preset
-from weekly_report_agent.service import prepare_report
+from sheetweave_agent.rules import RulePresetError, load_rule_preset, validate_rule_preset
+from sheetweave_agent.service import prepare_report
 
 
 def _general_payload() -> dict:

@@ -1,10 +1,10 @@
-# docAgent 项目架构
+# SheetWeaveAgent 项目架构
 
 安装、统一启动命令和使用流程见 [README](../README.md)，部署排查见 [运维说明](operations.md)，计划见 [ROADMAP](../ROADMAP.md)。本文只描述当前代码。
 
 ## 目录与模块
 
-源码直接位于 `src/`，setuptools 将其映射为逻辑包 `weekly_report_agent`；不是 `src.weekly_report_agent`。`weekly_report_agent.egg-info/` 为安装元数据，不是业务代码。
+源码直接位于 `src/`，setuptools 将其映射为逻辑包 `sheetweave_agent`；不是 `src.sheetweave_agent`。`sheetweave_agent.egg-info/` 为安装元数据，不是业务代码。
 
 | 文件/目录 | 职责 |
 |---|---|
@@ -122,7 +122,7 @@ Gunicorn 的 Web Worker 与任务 Worker 是不同进程。默认 Web 配置为�
 
 润色不再要求保持来源段落数量；`source_units` 保留行边界、正文列和事项上下文，`primary_field` 指明主要正文。模型优先输出 `paragraphs=[{level,text}]`，本地检查1～3级层级与跳级，再序列化正文编号、执行事实校验和渲染；旧 `text` 响应仍兼容。规则不自动添加“进展内容”，不凭冒号持续推断嵌套，清理重复项目符号，独立段落末尾孤立冒号/分号改句号；段内冒号/分号保留。语义归属是否合理仍需人工核对，事实校验不等于语义结构验收。
 
-`DocumentRule.numbering` 使用有限模板集合；报告计划保留可读编号、语义角色与块 ID，供审核与 HTML 定位使用。DOCX 导出将正文前缀转换为 `numPr` 引用的原生三级多级列表，使用关联的“docAgent 正文 1／2／3”样式；文本中不重复写入编号。每个目录的正文使用独立的 `abstractNum`、`num`、唯一 `nsid` 及三级关联样式，样式的 `numId` 必须指向该目录的实例，避免编辑或重新应用样式时串到第一组编号。上级条目重置下级编号；三级默认使用 `decimalEnclosedCircle` 自动生成带圈序号。模板已有样式与编号定义保留，新定义避免 ID 冲突。
+`DocumentRule.numbering` 使用有限模板集合；报告计划保留可读编号、语义角色与块 ID，供审核与 HTML 定位使用。DOCX 导出将正文前缀转换为 `numPr` 引用的原生三级多级列表，使用关联的“SheetWeaveAgent 正文 1／2／3”样式；文本中不重复写入编号。每个目录的正文使用独立的 `abstractNum`、`num`、唯一 `nsid` 及三级关联样式，样式的 `numId` 必须指向该目录的实例，避免编辑或重新应用样式时串到第一组编号。上级条目重置下级编号；三级默认使用 `decimalEnclosedCircle` 自动生成带圈序号。模板已有样式与编号定义保留，新定义避免 ID 冲突。
 
 正文格式由关联样式及列表层级控制，避免直接格式覆盖 Word 中的级别切换。校验解析编号实例和重启规则，还原可见正文后与确认计划逐段比较，并校验继承样式、列表格式及缩进。PDF 从同一 DOCX 转换，不另行生成编号。
 

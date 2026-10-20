@@ -10,9 +10,9 @@ import time
 from datetime import datetime
 from pathlib import Path
 
-from weekly_report_agent.profiles import ProfileStore
-from weekly_report_agent.server import load_environment
-from weekly_report_agent.task_queue import TaskQueue
+from sheetweave_agent.profiles import ProfileStore
+from sheetweave_agent.server import load_environment
+from sheetweave_agent.task_queue import TaskQueue
 
 ERRORS = (ValueError, OSError, sqlite3.Error)
 LINE = "─" * 56
@@ -122,7 +122,7 @@ def rename_profile(library: ProfileStore, profile_id: str, name: str | None = No
 
 def interactive(library: ProfileStore) -> int:
     """Run until exit; failed or cancelled operations return to the same menu."""
-    print("\ndocAgent · 报告方案管理")
+    print("\nSheetWeaveAgent · 报告方案管理")
     print(f"方案目录：{library.root}")
     while True:
         print(f"\n{LINE}\n  1  查询全部方案\n  2  按名称 / ID 搜索\n  3  筛选长期未使用方案")

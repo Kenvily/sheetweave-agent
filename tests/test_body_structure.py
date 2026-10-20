@@ -7,12 +7,12 @@ from pathlib import Path
 
 import pytest
 
-from weekly_report_agent.llm import LLMConfig, LLMService
-from weekly_report_agent.llm.service import LLMResponseError, _decode_response
-from weekly_report_agent.models import ParagraphKind
-from weekly_report_agent.planner import build_body_paragraphs
-from weekly_report_agent.rules import load_rule_preset, preset_payload, validate_rule_preset
-from weekly_report_agent.service import prepare_report, render_prepared_report
+from sheetweave_agent.llm import LLMConfig, LLMService
+from sheetweave_agent.llm.service import LLMResponseError, _decode_response
+from sheetweave_agent.models import ParagraphKind
+from sheetweave_agent.planner import build_body_paragraphs
+from sheetweave_agent.rules import load_rule_preset, preset_payload, validate_rule_preset
+from sheetweave_agent.service import prepare_report, render_prepared_report
 
 DAY = date(2026, 10, 19)
 

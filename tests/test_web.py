@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from weekly_report_agent.web import DOCX_MIME_TYPE, create_app
+from sheetweave_agent.web import DOCX_MIME_TYPE, create_app
 
 pytestmark = pytest.mark.usefixtures("saved_generation_profiles")
 

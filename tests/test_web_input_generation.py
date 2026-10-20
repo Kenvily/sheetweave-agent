@@ -6,9 +6,9 @@ from pathlib import Path
 import pytest
 from openpyxl import Workbook
 
-from weekly_report_agent.service import generate_report
-from weekly_report_agent.validator import validate_report
-from weekly_report_agent.web import DOCX_MIME_TYPE, create_app
+from sheetweave_agent.service import generate_report
+from sheetweave_agent.validator import validate_report
+from sheetweave_agent.web import DOCX_MIME_TYPE, create_app
 
 pytestmark = pytest.mark.usefixtures("saved_generation_profiles")
 

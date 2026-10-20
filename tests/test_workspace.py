@@ -7,9 +7,9 @@ from pathlib import Path
 
 import pytest
 
-from weekly_report_agent.llm import LLMConfig, LLMService
-from weekly_report_agent.web import DOCX_MIME_TYPE, _inline_diff, _unified_diff, create_app
-from weekly_report_agent.web_sessions import SnapshotStore
+from sheetweave_agent.llm import LLMConfig, LLMService
+from sheetweave_agent.web import DOCX_MIME_TYPE, _inline_diff, _unified_diff, create_app
+from sheetweave_agent.web_sessions import SnapshotStore
 
 pytestmark = pytest.mark.usefixtures("saved_generation_profiles")
 

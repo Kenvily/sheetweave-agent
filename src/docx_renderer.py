@@ -111,11 +111,14 @@ def _heading_style_definitions(template_xml: bytes) -> tuple[bytes, dict[Paragra
     }
     mapping = {}
     for level in range(1, 4):
-        style_id, name = f"DocAgentHeading{level}", f"docAgent 标题 {level}"
+        style_id, name = f"SheetWeaveHeading{level}", f"SheetWeaveAgent 标题 {level}"
         suffix = 1
         while style_id in existing_ids or name in existing_names:
             suffix += 1
-            style_id, name = f"DocAgentHeading{level}_{suffix}", f"docAgent 标题 {level} ({suffix})"
+            style_id, name = (
+                f"SheetWeaveHeading{level}_{suffix}",
+                f"SheetWeaveAgent 标题 {level} ({suffix})",
+            )
         node = ET.SubElement(
             root,
             _qn("style"),

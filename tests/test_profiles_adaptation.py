@@ -12,7 +12,7 @@ from xml.etree import ElementTree as ET
 import pytest
 from openpyxl import Workbook
 
-from weekly_report_agent.adaptation import (
+from sheetweave_agent.adaptation import (
     assist_mapping,
     inspect_requirements,
     inspect_table,
@@ -20,16 +20,16 @@ from weekly_report_agent.adaptation import (
     propose_rule,
     validate_adaptation,
 )
-from weekly_report_agent.cli import main as cli_main
-from weekly_report_agent.document_style import default_styles, validate_styles
-from weekly_report_agent.docx_renderer import DOCUMENT_PART, WORD_NS
-from weekly_report_agent.input_parser import parse_input
-from weekly_report_agent.profiles import ProfileStore
-from weekly_report_agent.service import prepare_report, render_prepared_report
-from weekly_report_agent.task_worker import TaskRunner
-from weekly_report_agent.validator import ReportValidationError, validate_report
-from weekly_report_agent.web import create_app
-from weekly_report_agent.web_sessions import session_preset
+from sheetweave_agent.cli import main as cli_main
+from sheetweave_agent.document_style import default_styles, validate_styles
+from sheetweave_agent.docx_renderer import DOCUMENT_PART, WORD_NS
+from sheetweave_agent.input_parser import parse_input
+from sheetweave_agent.profiles import ProfileStore
+from sheetweave_agent.service import prepare_report, render_prepared_report
+from sheetweave_agent.task_worker import TaskRunner
+from sheetweave_agent.validator import ReportValidationError, validate_report
+from sheetweave_agent.web import create_app
+from sheetweave_agent.web_sessions import session_preset
 
 TEMPLATE = Path("data/研发三部周报模板-v2.docx")
 SYNTHETIC = (
@@ -378,7 +378,7 @@ def test_queued_and_editable_reports_freeze_config_across_update_and_deletion(tm
     assert client.get(f"/workspace/{session.token}").status_code == 200
     assert session_preset(session).document.styles["body_1"]["size_pt"] == 12
     # Save after deletion still uses the frozen rule instead of the deleted library entry.
-    from weekly_report_agent.service import edit_report_block
+    from sheetweave_agent.service import edit_report_block
 
     prepared = edit_report_block(
         session.prepared, session.prepared.blocks[0].block_id, "人工确认0.81"
@@ -448,7 +448,7 @@ def test_adaptation_cannot_change_layout_or_silently_ignore_unknown_rules(tmp_pa
 
 
 def test_metadata_assistant_is_queued_and_never_receives_source_rows(tmp_path):
-    from weekly_report_agent.llm import LLMConfig, LLMService
+    from sheetweave_agent.llm import LLMConfig, LLMService
 
     class Client:
         def __init__(self):
@@ -555,7 +555,7 @@ def test_admin_menu_requires_full_id_and_can_continue_after_deletion(tmp_path, m
 
 
 def test_admin_menu_keeps_active_profile_and_exits_cleanly_on_eof(tmp_path, monkeypatch, capsys):
-    from weekly_report_agent.task_queue import TaskQueue
+    from sheetweave_agent.task_queue import TaskQueue
 
     module = admin_module()
     _, _, rule = proposal(tmp_path)

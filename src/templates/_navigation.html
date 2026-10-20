@@ -1,9 +1,9 @@
 {% macro navigation(active) %}
 <a class="skip-link" href="#main-content">跳转到主要内容</a>
 <header class="site-header">
-  <a class="brand" href="{{ url_for('index') }}" aria-label="docAgent 周报生成器首页">
-    <span class="brand-symbol" aria-hidden="true"><img src="{{ url_for('static', filename='docagent-mark.svg') }}" alt="" width="42" height="42"></span>
-    <strong class="brand-wordmark"><span>doc</span><span>Agent</span></strong>
+  <a class="brand" href="{{ url_for('index') }}" aria-label="SheetWeaveAgent 首页">
+    <span class="brand-symbol" aria-hidden="true"><img src="{{ url_for('static', filename='sheetweave-mark.svg') }}" alt="" width="42" height="42"></span>
+    <strong class="brand-wordmark"><span>SheetWeave</span><span>Agent</span></strong>
   </a>
   <nav aria-label="主导航">
     <a href="{{ url_for('index') }}"{% if active == 'create' %} aria-current="page"{% endif %}>新建周报</a>
