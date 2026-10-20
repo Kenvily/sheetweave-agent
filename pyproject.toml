@@ -21,7 +21,7 @@ packages = ["weekly_report_agent", "weekly_report_agent.llm", "weekly_report_age
 package-dir = {weekly_report_agent = "src"}
 
 [tool.setuptools.package-data]
-weekly_report_agent = ["templates/*.html", "static/*.css", "static/*.js", "rules/*.json", "examples/*"]
+weekly_report_agent = ["templates/*.html", "static/*.css", "static/*.js", "static/*.svg", "rules/*.json", "examples/*"]
 
 [tool.pytest.ini_options]
 addopts = "-q"

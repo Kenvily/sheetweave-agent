@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>周报审核工作区</title>
   <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
+  <link rel="icon" href="{{ url_for('static', filename='docagent-mark.svg') }}" type="image/svg+xml">
 </head>
 <body>
   {% from '_navigation.html' import navigation %}
@@ -19,7 +20,6 @@
       <div>
         <a class="back-link" href="{{ url_for('index') }}">← 新建周报</a>
         <h1>周报审核工作区</h1>
-        <p class="page-description">核对来源、调整内容，下载当前确认的版本。</p>
         <div class="workspace-meta" aria-label="当前报告信息">
           <span>{{ preset.name }}</span>
           <span>{{ session.report_date }}</span>
@@ -40,14 +40,14 @@
     <div class="review-overview" aria-label="审核摘要">
       <div><strong>{{ prepared.blocks|length }}</strong> 个内容块 <span class="overview-divider">/</span> <strong>{{ prepared.source.sources|length }}</strong> 行来源</div>
       {% set pending = prepared.blocks|selectattr('generated_text')|rejectattr('validation_level', 'equalto', 'pass')|list %}
-      <span class="review-status{% if pending %} needs-review{% endif %}">{% if pending %}{{ pending|length }} 个候选有告警，请核对后采用{% else %}当前内容已就绪，可继续编辑或导出{% endif %}</span>
+      <span class="review-status{% if pending %} needs-review{% endif %}">{% if pending %}{{ pending|length }} 个候选有告警，请核对后采用{% else %}当前版本可导出{% endif %}</span>
       <span class="session-hint">会话保留 2 小时</span>
     </div>
     <nav class="review-jump-links" aria-label="审核面板导航"><a href="#source-panel">来源表格</a><a href="#content-panel">内容审核</a><a href="#document-panel">文档效果</a></nav>
     <section class="review-grid" aria-label="三栏周报审核工作区">
       <aside id="source-panel" class="review-panel source-panel" aria-label="原始表格">
         <div class="panel-heading"><div class="panel-title-row">
-          <div><h2>来源表格 / 原始表格</h2><p class="panel-description">点击记录定位对应内容</p></div>
+          <div><h2>来源表格</h2></div>
           <span class="badge">{{ prepared.source.sources|length }} 行参与生成</span>
         </div>{{ zoom_controls('source', '缩放') }}</div>
         {% if prepared.source.warnings %}
@@ -58,7 +58,6 @@
           <article class="source-row trace-target" tabindex="0" data-source-id="{{ source.source_id }}" data-block-ids="{% for block in prepared.blocks_for_source(source.source_id) %}{{ block.block_id }}{% if not loop.last %} {% endif %}{% endfor %}">
             <div class="trace-heading">
               <strong>{% if source.sheet %}{{ source.sheet }}!{% endif %}{{ source.row_number }}</strong>
-              <code>{{ source.source_id }}</code>
             </div>
             {% if source.historical_completed %}<span class="status-tag">已完成 · 跳过 LLM</span>{% endif %}
             <dl class="source-fields">
@@ -74,17 +73,17 @@
 
       <section id="content-panel" class="review-panel content-panel" aria-label="内容审核">
         <div class="panel-heading"><div class="panel-title-row">
-          <div><h2>内容审核</h2><p class="panel-description">当前内容即最终导出的版本</p><span class="visually-hidden">内容结构与来源映射</span></div>
+          <div><h2>内容审核</h2><span class="visually-hidden">内容结构与来源映射</span></div>
           <span class="badge">{{ prepared.blocks|length }} 块</span>
         </div>{{ zoom_controls('content', '缩放') }}</div>
         <div class="blocks review-blocks">
           {% for block in prepared.blocks %}
           <article id="block-{{ block.block_id }}" class="block review-block trace-target" tabindex="0" data-block-id="{{ block.block_id }}" data-source-ids="{{ block.source_ids|join(' ') }}">
             <div class="block-head">
-              <div><strong>{{ block.section_title }} / {{ normalize_text(block.group_key) }}</strong><code>{{ block.block_id }}</code></div>
+              <div><strong>{{ block.section_title }}{% if block.section_title != normalize_text(block.group_key) %} / {{ normalize_text(block.group_key) }}{% endif %}</strong></div>
               <span class="effective-badge"><span>当前</span><strong>{% if block.effective_version == 'generated' %}模型候选{% elif block.effective_version == 'edited' %}人工编辑{% else %}原文{% endif %}</strong></span>
             </div>
-            <p class="source-links">来源：{{ block.source_ids|join('、') }}</p>
+            <p class="source-links">来源：{% for source in prepared.source.sources if source.source_id in block.source_ids %}{% if not loop.first %}、{% endif %}{% if source.sheet %}{{ source.sheet }} · {% endif %}第 {{ source.row_number }} 行{% endfor %}</p>
 
             <div class="version-card selected current-content-card">
               <div class="version-heading">

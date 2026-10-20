@@ -5,19 +5,19 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>周报生成器</title>
   <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
+  <link rel="icon" href="{{ url_for('static', filename='docagent-mark.svg') }}" type="image/svg+xml">
 </head>
 <body>
   {% from '_navigation.html' import navigation %}
   {{ navigation('create') }}
   <main id="main-content" class="container{% if prepared %} container-wide{% endif %}" tabindex="-1">
     <header class="page-intro">
-      <div><p class="eyebrow">从工作记录到正式周报</p><h1>整理这一周的进展</h1><p class="page-description">上传表格，选择整理方式。审核内容后，导出格式统一的周报。</p></div>
+      <h1>新建周报</h1>
       <span class="intro-tag">CSV / XLSX → DOCX</span>
     </header>
-    <ol class="workflow" aria-label="周报生成流程"><li aria-current="step"><span>01</span>上传与配置</li><li><span>02</span>审核与调整</li><li><span>03</span>确认并导出</li></ol>
     <div class="create-layout">
     <section class="card configuration-card" aria-label="周报生成配置">
-      <div class="section-head"><div><h2>新建周报</h2><p class="section-description">完成以下配置，再进入审核工作区。</p></div><span class="badge">第一步</span></div>
+      <div class="section-head"><h2>生成设置</h2></div>
       {% if error %}<div class="alert" role="alert" tabindex="-1">{{ error }}</div>{% endif %}
       {% if not presets %}<p class="alert">尚未创建方案。请先<a href="{{ url_for('profiles.library') }}">新建并保存方案</a>，再上传周报生成。</p>{% endif %}
       <form data-task-url="{{ url_for('submit_generation_task') }}" id="report-form" action="{{ url_for('generate') }}" method="post" enctype="multipart/form-data">
@@ -25,19 +25,17 @@
         <fieldset class="form-section"><legend><span class="step-number">1</span>选择数据来源</legend>
         <div class="grid input-grid">
           <label class="field upload-field">
-            <span>周报文件</span>
-            <small>支持 CSV、XLSX，保留原始表格用于核对。</small>
+            <span>周报文件（CSV / XLSX）</span>
             <input type="file" name="csv_file" accept=".csv,.xlsx,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" required>
           </label>
           <label class="field">
-            <span>已保存方案</span>
+            <span class="field-heading">已保存方案 <a href="{{ url_for('profiles.library') }}">管理方案</a></span>
             <select name="preset" required{% if not presets %} disabled{% endif %}>
               {% if not presets %}<option value="">暂无方案，请先新建方案</option>{% endif %}
               {% for preset in presets %}
               <option data-section-default="{{ preset.document.heading_start_default }}" value="{{ preset.id }}"{% if form.get('preset', '') == preset.id %} selected{% endif %}>{{ preset.name }}</option>
               {% endfor %}
             </select>
-            <small>需要调整字段映射或文档模板？前往<a href="{{ url_for('profiles.library') }}">方案适配</a>，试生成并保存后在此选用。</small>
           </label>
         </div>
 
@@ -95,20 +93,18 @@
           <textarea name="custom_instruction" rows="3" placeholder="例如：按成果、问题和后续动作整理，不改变任何事实。">{{ form.get('custom_instruction', '') }}</textarea>
         </label>
 
-        <p class="mode-hint" id="mode-hint" role="status">保留原文事项顺序与显式层级，仅规范术语和格式，不调用模型。</p>
         </fieldset>
         <div class="actions">
-          <span class="action-hint">建议先审核，再下载正式文件。</span>
           <button class="secondary" type="submit"{% if not presets %} disabled{% endif %} formaction="{{ url_for('generate') }}">直接下载 DOCX</button>
           <button type="submit"{% if not presets %} disabled{% endif %} formaction="{{ url_for('preview') }}">预览来源与内容 <span aria-hidden="true">→</span></button>
         </div>
       </form>
     </section>
 
-    <aside class="creation-guide" aria-label="生成前提示">
-      <section class="guide-card"><span class="eyebrow">本次报告</span><h2>让内容先说清楚</h2><p>原文保留、润色或精简，都可在审核页逐块调整。</p><dl class="generation-summary"><div><dt>规则</dt><dd id="summary-preset">—</dd></div><div><dt>整理方式</dt><dd id="summary-mode">—</dd></div><div><dt>报告日期</dt><dd id="summary-date">—</dd></div></dl></section>
-      <section class="guide-card"><h2>先试一份示例</h2><p>初次使用可下载示例，在<a href="{{ url_for('profiles.library') }}">方案适配</a>中分析、试生成并保存，再回到此处选用。</p><div class="example-links"><a href="{{ url_for('download_example', filename='general-weekly.csv') }}">示例 CSV ↗</a><a href="{{ url_for('download_example', filename='general-weekly.xlsx') }}">示例 XLSX ↗</a></div></section>
-      <p class="guide-note">{% if llm_available %}模型服务已配置，可按需选择整理模式。{% else %}模型服务尚未配置，原文模式可正常使用。{% endif %}<br>审核会话保留 2 小时，请及时下载。</p>
+    <aside class="creation-guide" aria-label="报告概览">
+      <section class="guide-card"><h2>报告概览</h2><dl class="generation-summary"><div><dt>方案</dt><dd id="summary-preset">—</dd></div><div><dt>整理方式</dt><dd id="summary-mode">—</dd></div><div><dt>报告日期</dt><dd id="summary-date">—</dd></div></dl></section>
+      <section class="guide-card example-card"><h2>示例文件</h2><div class="example-links"><a href="{{ url_for('download_example', filename='general-weekly.csv') }}">下载 CSV ↗</a><a href="{{ url_for('download_example', filename='general-weekly.xlsx') }}">下载 XLSX ↗</a></div></section>
+      <div class="service-summary"><span class="service-indicator{% if llm_available %} configured{% endif %}">{% if llm_available %}模型已配置{% else %}模型未配置{% endif %}</span><span>审核会话保留 2 小时</span></div>
     </aside>
     </div>
     <section class="usage-stats" aria-label="匿名使用统计">
@@ -240,9 +236,6 @@
         const usesModel = contentMode.value !== "original";
         document.getElementById("model-field").hidden = !usesModel;
         form.elements.model.disabled = !usesModel;
-        document.getElementById("mode-hint").textContent = usesModel
-          ? "允许模型重分段、重组结构；关键事实保持准确，提示性差异供核对。"
-          : "保留原文事项顺序与显式层级，仅规范术语和格式，不调用模型。";
         document.getElementById("summary-mode").textContent = contentMode.selectedOptions[0].textContent;
       };
       contentMode.addEventListener("change", updateCustomInstruction);

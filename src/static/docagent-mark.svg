@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" fill="none" role="img" aria-labelledby="logo-title">
+  <title id="logo-title">docAgent</title>
+  <path fill="#365bb9" fill-rule="evenodd" d="M11 4h17l14 14v13c0 8.284-6.716 15-15 15H11a7 7 0 0 1-7-7V11a7 7 0 0 1 7-7Zm2 32 8.6-20h4.8L35 36h-5.2l-1.6-4.3h-8.4L18.2 36H13Zm8.4-8.6h5.2L24 20.7l-2.6 6.7ZM15 39h17v3H15v-3Z" clip-rule="evenodd"/>
+  <path fill="#ed923e" d="M28 4v10a4 4 0 0 0 4 4h10L28 4Z"/>
+</svg>
