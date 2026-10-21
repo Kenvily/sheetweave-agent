@@ -20,6 +20,7 @@ from .pdf_preview import PdfPreviewError, PdfPreviewService
 from .service import render_prepared_report
 from .stats import UsageStats
 from .task_queue import TaskCancelled, TaskQueue
+from .timing import diagnostic_event, diagnostic_scope, measure
 from .web_sessions import SessionConflictError, SnapshotStore, session_preset
 
 LOGGER = logging.getLogger(__name__)
@@ -44,10 +45,7 @@ class TaskRunner:
 
     @classmethod
     def from_environment(cls, queue: TaskQueue) -> TaskRunner:
-        root = os.environ.get("WEEKLY_REPORT_SNAPSHOT_DIR", "").strip()
-        snapshots = SnapshotStore(
-            Path(root or str(Path(tempfile.gettempdir()) / "weekly-report-agent-snapshots"))
-        )
+        snapshots = SnapshotStore.from_environment()
         try:
             stats = UsageStats.from_environment()
         except (OSError, ValueError, sqlite3.Error):
@@ -56,6 +54,13 @@ class TaskRunner:
         return cls(queue, snapshots, stats=stats)
 
     def run(self, job: dict, owner: str) -> None:
+        with diagnostic_scope(task_id=job["id"], task_kind=job["kind"]), measure(None, "task"):
+            diagnostic_event("worker_enter")
+            self._run(job, owner)
+            status = self.queue.status(job["id"])
+            diagnostic_event("task_result", state=status["state"])
+
+    def _run(self, job: dict, owner: str) -> None:
         """Keep a lease while processing; never replay crashed external calls silently."""
         token = job["id"]
         stopped, lost = Event(), Event()
@@ -201,6 +206,7 @@ class TaskRunner:
         except TaskCancelled:
             self.queue.finish(token, owner, error="任务已取消或后台执行权已失效。")
         except (ValueError, LLMClientError, PdfPreviewError) as exc:
+            diagnostic_event("task_failure", exception_type=type(exc).__name__)
             self.queue.finish(token, owner, error=str(exc))
         except Exception as exc:
             LOGGER.error("后台任务失败（%s）。", type(exc).__name__)

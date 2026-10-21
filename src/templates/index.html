@@ -104,7 +104,7 @@
     <aside class="creation-guide" aria-label="报告概览">
       <section class="guide-card"><h2>报告概览</h2><dl class="generation-summary"><div><dt>方案</dt><dd id="summary-preset">—</dd></div><div><dt>整理方式</dt><dd id="summary-mode">—</dd></div><div><dt>报告日期</dt><dd id="summary-date">—</dd></div></dl></section>
       <section class="guide-card example-card"><h2>示例文件</h2><div class="example-links"><a href="{{ url_for('download_example', filename='general-weekly.csv') }}">下载 CSV ↗</a><a href="{{ url_for('download_example', filename='general-weekly.xlsx') }}">下载 XLSX ↗</a></div></section>
-      <div class="service-summary"><span class="service-indicator{% if llm_available %} configured{% endif %}">{% if llm_available %}模型已配置{% else %}模型未配置{% endif %}</span><span>审核会话保留 2 小时</span></div>
+      <div class="service-summary"><span class="service-indicator{% if llm_available %} configured{% endif %}">{% if llm_available %}模型已配置{% else %}模型未配置{% endif %}</span><span>审核会话保留 {{ session_retention_label }}</span></div>
     </aside>
     </div>
     <section class="usage-stats" aria-label="匿名使用统计">
@@ -185,7 +185,7 @@
         {% if snapshot_token %}
         <div class="snapshot-actions">
           <a class="button-link" href="{{ url_for('download_snapshot', token=snapshot_token) }}">下载本次预览 DOCX</a>
-          <strong>本次预览已保留 2 小时，无需重新选择文件，也不会再次调用模型。</strong>
+          <strong>新预览保留 {{ session_retention_label }}，无需重新选择文件，也不会再次调用模型。</strong>
         </div>
         {% endif %}
       </article>

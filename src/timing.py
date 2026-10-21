@@ -2,10 +2,45 @@
 
 from __future__ import annotations
 
+import json
+import logging
 from collections.abc import Iterator
 from contextlib import contextmanager
+from contextvars import ContextVar
+from datetime import UTC, datetime
 from threading import Lock
 from time import perf_counter
+
+_CONTEXT: ContextVar[dict | None] = ContextVar("diagnostic_context", default=None)
+LOGGER = logging.getLogger(__name__)
+
+
+def diagnostic_context() -> dict:
+    return dict(_CONTEXT.get() or {})
+
+
+@contextmanager
+def diagnostic_scope(**fields) -> Iterator[None]:
+    token = _CONTEXT.set({**(_CONTEXT.get() or {}), **fields})
+    try:
+        yield
+    finally:
+        _CONTEXT.reset(token)
+
+
+def diagnostic_event(event: str, **fields) -> None:
+    """Only call with identifiers, counts and exception types, never user content."""
+    LOGGER.info(
+        json.dumps(
+            {
+                "event": event,
+                "time": datetime.now(UTC).isoformat(timespec="milliseconds"),
+                **(_CONTEXT.get() or {}),
+                **fields,
+            },
+            ensure_ascii=False,
+        )
+    )
 
 
 class TimingRecorder:
@@ -19,6 +54,7 @@ class TimingRecorder:
     def measure(self, stage: str, **counts: int) -> Iterator[None]:
         """Record successful and failed stages, including concurrent batches."""
         started = perf_counter()
+        diagnostic_event("stage_start", stage=stage, **counts)
         success = False
         try:
             yield
@@ -30,6 +66,7 @@ class TimingRecorder:
                 "success": success,
                 **counts,
             }
+            diagnostic_event("stage_end", **event)
             with self._lock:
                 self._events.append(event)
 
@@ -41,9 +78,6 @@ class TimingRecorder:
 
 @contextmanager
 def measure(recorder: TimingRecorder | None, stage: str, **counts: int) -> Iterator[None]:
-    """Measure only when a caller explicitly supplies a recorder."""
-    if recorder is None:
+    """Log stage timings and optionally retain them in a shared recorder."""
+    with (recorder or TimingRecorder()).measure(stage, **counts):
         yield
-    else:
-        with recorder.measure(stage, **counts):
-            yield

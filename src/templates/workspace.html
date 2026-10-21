@@ -41,7 +41,7 @@
       <div><strong>{{ prepared.blocks|length }}</strong> 个内容块 <span class="overview-divider">/</span> <strong>{{ prepared.source.sources|length }}</strong> 行来源</div>
       {% set pending = prepared.blocks|selectattr('generated_text')|rejectattr('validation_level', 'equalto', 'pass')|list %}
       <span class="review-status{% if pending %} needs-review{% endif %}">{% if pending %}{{ pending|length }} 个候选有告警，请核对后采用{% else %}当前版本可导出{% endif %}</span>
-      <span class="session-hint">会话保留 2 小时</span>
+      <span class="session-hint">有效至 {{ session.expires_at|session_expiry }}</span>
     </div>
     <nav class="review-jump-links" aria-label="审核面板导航"><a href="#source-panel">来源表格</a><a href="#content-panel">内容审核</a><a href="#document-panel">文档效果</a></nav>
     <section class="review-grid" aria-label="三栏周报审核工作区">

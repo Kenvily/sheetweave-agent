@@ -9,7 +9,13 @@ from dataclasses import dataclass, replace
 from enum import Enum
 
 from sheetweave_agent.models import ContentBlock, PreparedReport
-from sheetweave_agent.timing import TimingRecorder, measure
+from sheetweave_agent.timing import (
+    TimingRecorder,
+    diagnostic_context,
+    diagnostic_event,
+    diagnostic_scope,
+    measure,
+)
 
 from .client import LLMClient, OpenAICompatibleClient
 from .config import LLMConfig
@@ -295,17 +301,25 @@ def _decode_response(content: str, expected_ids: tuple[str, ...]) -> dict[str, s
 
 
 def _batches(
-    blocks: Sequence[ContentBlock], max_chars: int
+    blocks: Sequence[ContentBlock],
+    max_chars: int,
+    *,
+    block_sizes: Sequence[int] | None = None,
+    overhead: int = 0,
 ) -> tuple[tuple[ContentBlock, ...], ...]:
     batches: list[list[ContentBlock]] = []
     current: list[ContentBlock] = []
-    current_size = 0
-    for block in blocks:
-        size = len(block.original_text) + len(block.group_key) + len(block.section_title) + 300
+    current_size = overhead
+    for index, block in enumerate(blocks):
+        size = (
+            block_sizes[index]
+            if block_sizes is not None
+            else len(block.original_text) + len(block.group_key) + len(block.section_title) + 300
+        )
         if current and current_size + size > max_chars:
             batches.append(current)
             current = []
-            current_size = 0
+            current_size = overhead
         current.append(block)
         current_size += size
     if current:
@@ -379,10 +393,52 @@ class LLMService:
         client = self._client or OpenAICompatibleClient(config, timings=self._timings)
         candidates: dict[str, str] = {}
 
+        # Account for the actual JSON and fixed contract, not only editable_text.
+        empty_messages = _messages(prepared, (), selected_mode, custom_instruction)
+        overhead = sum(len(message["content"]) for message in empty_messages)
+        sizes = [
+            len(
+                json.dumps(
+                    _request_block(prepared, block, selected_mode, custom_instruction),
+                    ensure_ascii=False,
+                )
+            )
+            + 2
+            for block in editable
+        ]
+        batches = _batches(editable, config.max_batch_chars, block_sizes=sizes, overhead=overhead)
+        parent_context = diagnostic_context()
+        diagnostic_event(
+            "llm_plan",
+            model=config.model,
+            batches=len(batches),
+            blocks=len(editable),
+            max_concurrency=config.max_concurrency,
+            batch_char_limit=config.max_batch_chars,
+        )
+
         def generate_batch(item: tuple[int, tuple[ContentBlock, ...]]) -> dict[str, str]:
             index, batch = item
-            with measure(self._timings, "llm_batch", blocks=len(batch)):
+            with (
+                diagnostic_scope(
+                    **{
+                        **parent_context,
+                        "model": config.model,
+                        "batch": index,
+                        "batches": len(batches),
+                        "blocks": len(batch),
+                    }
+                ),
+                measure(self._timings, "llm_batch", blocks=len(batch)),
+            ):
                 messages = _messages(prepared, batch, selected_mode, custom_instruction)
+                message_chars = sum(len(message["content"]) for message in messages)
+                diagnostic_event(
+                    "llm_batch_input",
+                    blocks=len(batch),
+                    input_chars=message_chars,
+                    oversized=message_chars > config.max_batch_chars,
+                )
                 stream = getattr(client, "stream", None)
                 if on_delta is not None and callable(stream):
                     chunks = []
@@ -394,9 +450,9 @@ class LLMService:
                     response = client.complete(messages, config.model)
                     if on_delta is not None:
                         on_delta(index, response)
-                return _decode_response(response, tuple(block.block_id for block in batch))
+                with measure(self._timings, "response_parse", blocks=len(batch)):
+                    return _decode_response(response, tuple(block.block_id for block in batch))
 
-        batches = _batches(editable, config.max_batch_chars)
         if len(batches) > 1 and config.max_concurrency > 1:
             with ThreadPoolExecutor(max_workers=config.max_concurrency) as executor:
                 for generated in executor.map(generate_batch, enumerate(batches, start=1)):

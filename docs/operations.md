@@ -1,92 +1,206 @@
-# SheetWeaveAgent 运维说明
+# SheetWeaveAgent 项目与运维说明
 
-单终端统一启动及可选分开管理方式见 [README](../README.md#部署单终端启动)。本文说明排查和数据边界，架构见 [项目介绍](project-overview.md)。
+## 架构与目录
 
-## 任务一直排队
+```text
+浏览器 → Flask / Gunicorn → SQLite 任务队列 → 独立 Worker
+   ↑             ↑              ↑                  |
+   └─ 状态短轮询 ┘              └─ 更新进度/结果 ──┘
 
-`POST /tasks → 202` 只表示入队；`GET /tasks/... → 200` 只表示状态接口正常。Gunicorn 的 `Booting worker` 是 Web 子进程，不代表独立任务进程已启动。
-
-先检查后台进程并查看其终端/进程管理器日志：
-
-```bash
-pgrep -af 'sheetweave_agent.task_worker'
+Worker：CSV/XLSX → 字段映射/方案 → IR → 可选 LLM
+                                     ↓
+                              事实校验与失败回退
+                                     ↓
+                              规范化 → DOCX 格式校验
+                                     ↓
+浏览器 ← 审核/编辑/下载 ← 带有效期的文件快照
 ```
 
-没有进程时，若使用统一入口，检查其退出错误后重新启动；若分开管理，启动 `python -m sheetweave_agent.task_worker`，已有任务会自动领取。已有进程却不处理时，确认两端使用同一 Python、项目安装和 `.env`。分开管理时，在两个终端各执行以下检查；统一入口自动为两端传入相同环境。检查不输出密钥、不创建数据库：
+方案适配负责识别并确认字段、目录、正文来源和格式；实际报告生成复用已保存方案。多行内容可按最终标题合并成一个审核区块。规则与 Harness 控制结构、事实、格式及失败回退；LLM 在允许的正文范围内整理语义，不能替代格式验收。
 
-```bash
-which python
-pwd
-python - <<'PY'
-import os
-import tempfile
-from pathlib import Path
-import sheetweave_agent.task_queue as module
-
-root = Path(module.__file__).resolve().parents[1]
-print("项目:", root)
-for name, default in {
-    "TASK_DB_PATH": root / "var/tasks.sqlite3",
-    "TASK_FILES_DIR": root / "var/tasks",
-    "WEEKLY_REPORT_SNAPSHOT_DIR": Path(tempfile.gettempdir()) / "weekly-report-agent-snapshots",
-}.items():
-    print(name, Path(os.environ.get(name, "").strip() or default).resolve())
-PY
-```
-
-路径必须一致且可写；连接不同数据库的 Worker 会认为队列为空。也应确认后台并发是否已被运行任务占满。模块不存在时先同步当前代码，再 `python -m pip install -e .`；重装旧代码不会获得新模块。
-
-## 任务状态与恢复
-
-`queued → running → finalizing → succeeded`，也可进入 `failed` 或 `cancelled`。接口区分 `queue_seconds` 与 `run_seconds`，后台执行时间不全是 API 时间。
-
-- 原子领取和短事务限制同配置 Worker 的全局任务并发，不在 LLM 等待期间持有 SQLite 写锁。
-- 默认 60 秒租约、约 5 秒续租；状态查询及 Worker 周期检测中断，不自动重放可能计费的调用。
-- 取消排队任务可阻止执行；运行任务在后续回调停止。上游读取/PDF 子进程未结束时仍保留并发容量，发布阶段不接受取消。
-- 重生成与 PDF 在执行前及发布时校验 revision。快照与任务数据库没有跨存储事务；发布时崩溃可能出现状态失败但会话已更新，需刷新核对。
-- 短轮询网络重试不重复提交；同页刷新可恢复。关闭标签页不取消任务，但没有账户或历史任务列表，不能保证重新找回入口。
-- 排队超过两小时不再执行；终态任务在结束两小时后由 Worker 清理。Web 与 Worker 都需保持运行；统一入口协调启动/退出，未配置自动重启/开机自启。
-
-队列事件最多保存 16 MiB，轮询按游标每次读取最多 100 条。超过事件上限仅停止保存更多临时候选分片，不影响完整校验与导出。未成功入队前进程崩溃可能留下无记录上传目录，需核对后处理，不能清空全部 `var/`。
-
-## 运行数据
-
-| 路径 | 用途与保留方式 |
+| 位置 | 职责 |
 |---|---|
-| `var/stats.sqlite3`、`.key` | 匿名聚合统计及去重密钥；一起保留/备份，删除会丢失统计 |
-| `var/tasks.sqlite3` | 持久队列、状态、短期候选事件与结果引用；包含短期业务内容 |
-| `var/profiles.sqlite3` | 长期方案索引、版本、最近实际提交/成功时间与使用次数，不自动过期 |
-| `var/profiles/<id>/<version>/` | 方案规则、确认依据与模板的不可变版本，需连同索引备份 |
-| 快照目录同级 `*-adaptations/` | 初次适配用的私有表格/模板样例与草稿，两小时有效，新分析时清理过期草稿 |
-| `var/tasks/<id>/` | 私有输入和模板，按任务保留策略清理 |
-| 快照目录 | 默认系统临时目录，也可设为 `var/snapshots/`；两小时审核会话及 DOCX/PDF |
-| `var/logs/`、`var/run/` | 部署方式按需创建的日志/PID；PID 文件不保证进程仍存在 |
-| `*-wal`、`*-shm` | SQLite 自身管理的日志/共享索引，运行中不手动删除 |
-| `.stats-migration.lock` | 旧统计库迁移的文件锁，文件存在不代表仍在迁移 |
-| `outputs/` | 按需生成的报告或临时测速产物，不是任务数据库 |
+| `src/` | 映射为 Python 包 `sheetweave_agent`，不使用 `src.sheetweave_agent` |
+| `input_parser.py`、`csv_parser.py` | CSV/XLSX、表头、工作表/周次、字段映射及来源位置 |
+| `models.py`、`content_builder.py`、`planner.py` | IR、分组、段落层级、正文与目录规划 |
+| `normalizer.py`、`numbering.py` | 确定性术语、称呼、日期、标点和编号；术语表为 `TERM_REPLACEMENTS` |
+| `adaptation.py`、`web_profiles.py`、`profiles.py` | 辅助识别、用户确认、试生成、永久方案与不可变版本 |
+| `llm/`、`service.py` | 服务端模型配置、批次处理、事实校验与生成编排 |
+| `docx_renderer.py`、`word_lists.py`、`document_style.py`、`validator.py` | 标准库 ZIP/XML 渲染、Word 样式/列表及格式校验 |
+| `web.py`、`web_sessions.py`、`pdf_preview.py` | Web、带有效期的审核快照、revision 和 PDF 转换 |
+| `task_queue.py`、`task_worker.py`、`server.py` | 持久队列、独立执行与单终端进程管理 |
+| `stats.py`、`timing.py` | 匿名聚合统计和阶段计时 |
+| `templates/`、`static/` | 页面、样式、SVG 品牌资源、短轮询和三栏审核交互 |
+| `src/rules/general.json` | 内部适配基线，不是公开生成入口或默认业务规则 |
+| `tests/` | 核心回归；`fixtures/rules/rd3.json` 仅供周次矩阵等测试使用 |
+| `scripts/` | 方案管理和合成数据测速 |
+| `data/`、`src/examples/` | 参考夹具与可分发示例，不自动清理业务输入 |
+| `var/`、`outputs/` | 私有运行数据及按需生成的报告，不提交 Git |
 
-运行数据、密钥、候选内容和输出不提交 Git。在线备份 SQLite 使用 backup API；直接复制主库可能遗漏 WAL。旧统计库只在新默认库不存在时复制，旧文件不删除、不持续同步。
+原文保留不调用模型，保留事项顺序与显式层级；规范润色允许重分条、重组结构和可选补充要求。日期、版本、指标、明确数量和状态冲突会回退，术语及无单位数字的未配对差异作为提示保留。人工编辑以当前内容为基础，确认 Diff 后生效。来源、模型候选和当前版本分别保存，可追溯对应输入行。
 
-## 方案维护
+DOCX 使用原生三级正文列表及关联样式，每个目录隔离编号定义、实例和样式，支持 Word 中续号和级别调整。默认三级正文比二级多缩进两字符。标题具有大纲语义；HTML 是语义预览，最终分页以 Word/PDF 为准。复杂表格、文本框等模板不保证兼容。
 
-运行 `python scripts/manage_profiles.py` 进入循环菜单，可查询、搜索、按未使用天数筛选、查看详情、重命名和确认删除；操作后返回菜单，输入 `0` 退出。原有一次性子命令仍可使用。查询与确认删除命令见 [README](../README.md#m6适配并复用报告方案)。`--unused-days` 仅筛选；没有按时间自动删除方案的机制，服务停止也不改变保留策略。浏览器进入页面不更新使用时间，任务成功入队/CLI 实际提交才记录最近提交时间，成功完成另记成功时间。
+## 服务启动
 
-Web 与 Worker 使用相同的 `REPORT_PROFILES_DIR`（默认 `var/profiles/`），索引为该目录同级同名 `.sqlite3`。脚本默认安全加载项目 `.env`；可指定 `--env-file`，或以 `--no-env` 使用当前终端环境。无账户隔离，方案供服务器共享。
+推荐使用 [README](../README.md) 的统一入口：默认 2 个 gthread Web 进程、每进程 2 个请求线程，另有独立后台任务进程。日志输出当前终端；未安装开机自启或外部进程守护。端口被占用时启动会失败。
 
-删除作用于一个自定义方案的全部版本与模板，需要输入完整 ID；存在 queued/running/finalizing 或仍有执行权的任务引用时拒绝操作。任务/会话已有独立副本，不依赖方案目录的后续存续。内置规则不属于此库。
-
-备份应在停止方案写入后同时保留索引与版本目录，或由管理员在持有方案文件锁期间协调 SQLite backup API 和目录备份。不要仅复制数据库而漏掉模板。崩溃可能留下未完成版本目录或 `.deleted-*` 临时目录，先检查数据库与任务引用再人工恢复/清理；程序不会覆盖未知文件。
-
-## 网络访问与 PDF
-
-同机或 SSH 转发使用 `127.0.0.1:18989`。远程 Linux 可在浏览器机器执行：
+需要分开管理时，**两个终端必须加载相同配置**：
 
 ```bash
-ssh -N -L 18989:127.0.0.1:18989 用户@服务器
+conda activate py31115
+cd ~/SheetWeaveAgent
+set -a; source .env; set +a            # 仅加载自己信任的本地配置
+# 终端一：
+gunicorn --config gunicorn.conf.py --workers 2 --worker-class gthread --threads 2 \
+  --bind 127.0.0.1:18989 'sheetweave_agent.web:create_app()'
+# 终端二：执行相同环境配置后
+python -m sheetweave_agent.task_worker
 ```
 
-然后访问本机 `http://127.0.0.1:18989`。局域网直连使用 Web 绑定 `0.0.0.0:18989`，网络放行遵循服务器已有规则，不自动改防火墙。
+同机浏览器访问 `http://127.0.0.1:18989`。远程服务器可用 `ssh -N -L 18989:127.0.0.1:18989 用户@服务器` 转发；局域网直连需绑定 `0.0.0.0` 并按现有网络规则放行。程序不修改代理、防火墙或系统源。迁移目录后重新 `python -m pip install -e .`，旧包升级可先卸载 `weekly-report-agent`；新包/命令统一使用 SheetWeave 名称。
 
-WSL2 的 localhost 访问与局域网访问不同。若使用 Windows portproxy，转发目标为当前 WSL IP，监听地址为当前 Windows LAN IP；重启或切换网络后需更新。用 `wsl.exe hostname -I`、`ipconfig` 和 `netsh interface portproxy show v4tov4` 核对实际地址。调整时只修改本项目 18989 规则，不用清空全部转发规则的 reset 命令。Web 与任务 Worker 两端都要运行，Windows 休眠可能中断服务。
+## 配置
 
-PDF 是可选功能，依赖已有 LibreOffice。缺少转换器不影响 HTML 或 DOCX；需另行验收字体与分页，不自动安装系统软件。
+统一入口默认读取项目 `.env`，也支持 `--env-file /绝对路径/配置.env` 或 `--no-env`。修改后重启 Web 和 Worker。下表默认值以未设置环境变量时的代码为准，`.env.example` 是可调整的示例；除明确说明外，数值配置不要填空字符串。
+
+### 模型与 PDF
+
+| 变量 | 默认值 / 用途 |
+|---|---|
+| `LLM_API_KEY` | 空；仅保存在服务端，原文模式不需要 |
+| `LLM_API_BASE` | `https://api.deepseek.com`；OpenAI-compatible Base，不含 `/chat/completions` |
+| `LLM_MODEL` | `deepseek-chat`；当前默认模型 |
+| `LLM_ALLOWED_MODELS` | `deepseek-chat,deepseek-reasoner`；默认模型必须在列表内 |
+| `LLM_TIMEOUT` | `60` 秒，连接/单次阻塞读取等待阈值；不是整个任务的总时限 |
+| `LLM_MAX_RETRIES` | `1`，限流、服务端错误及部分连接错误的最多重试次数；超时与解析失败不自动重试 |
+| `LLM_MAX_BATCH_CHARS` | `12000`，首次规范润色批次的完整消息字符预算，含固定 Prompt、来源和事实上下文；单个审核区块不可拆分，超限会记录 `oversized=true` |
+| `LLM_MAX_CONCURRENCY` | `2`，单份报告的并行批次数，范围 1～4 |
+| `LLM_AUTO_CORRECT` | `false`；开启后可能为冲突追加修正调用 |
+| `LLM_REASONING_EFFORT` | 空，不发送；仅在所选服务/模型支持时配置 |
+| `LIBREOFFICE_PATH` | 空，自动检测 `soffice` / `libreoffice`；仅 PDF 需要 |
+| `PDF_PREVIEW_TIMEOUT` | `45` 秒，PDF 转换超时 |
+
+通用 `LLM_*` 未设置时兼容旧 `DEEPSEEK_*`；显式空值不会回退旧值。Key 不会显示在网页中。不要未经授权发送公司内容；方案识别需确认脱敏和外发权限，CLI 模型模式需 `--allow-external`。
+
+### 会话、队列与存储
+
+| 变量 | 默认值 / 用途 |
+|---|---|
+| `REPORT_SESSION_TTL` | **`2h`**；新审核会话及下载快照有效期，空值也使用默认；正整数加 `h/d/w` 或“小时/天/周” |
+| `WEEKLY_REPORT_SNAPSHOT_DIR` | 空，系统临时目录下 `weekly-report-agent-snapshots/`；沿用旧名兼容快照，可改为持久路径 |
+| `TASK_DB_PATH` | 空，项目 `var/tasks.sqlite3` |
+| `TASK_FILES_DIR` | 空，项目 `var/tasks/` |
+| `TASK_MAX_CONCURRENCY` | `2`，同配置后台 Worker 共享的任务并发上限，范围 1～16 |
+| `TASK_QUEUE_CAPACITY` | `100`，队列接纳容量 |
+| `REPORT_PROFILES_DIR` | 空，项目 `var/profiles/`，元数据为其同级 `profiles.sqlite3` |
+| `STATS_DB_PATH` | 空，项目 `var/stats.sqlite3` |
+| `REPORT_TIMEZONE` | `Asia/Shanghai`；统计及审核到期时间的显示时区 |
+| `STATS_HMAC_KEY` | 空，自动生成并保存 `.key`；显式配置至少 16 字节且所有进程一致 |
+
+`TASK_MAX_CONCURRENCY` 控制同时执行几份任务，`LLM_MAX_CONCURRENCY` 控制一份报告内几批模型请求并行；提高并发不能缩短单次上游响应时间。Web 与 Worker 必须使用同一路径和配置。
+
+将新审核会话延长至 24 小时：
+
+```dotenv
+REPORT_SESSION_TTL=24h
+```
+
+可设置 `24h`、`3d`、`1w` 或 `24小时`、`3天`、`1周`。未设置新变量时兼容旧的 `REPORT_SESSION_TTL_SECONDS` 正整数秒值；两者同时存在时新变量优先。
+
+有效期从创建时计算，写入快照的 `expires_at`；刷新、编辑、下载或关闭页面均不会延长或暂停。配置变更只影响新快照，旧快照仍按原到期时间读取和清理。首页显示当前配置，审核页显示该会话实际到期时间。过期访问立即拒绝，物理文件在后续访问或创建会话时按需清理；停服时不会定时执行删除。临时目录也可能由操作系统清理，如需稳定保存到配置期限请使用持久路径。
+
+以下周期**互相独立**：审核会话使用上面的可配值；适配草稿固定两小时，新分析时清理；排队超过两小时不再执行，终态任务结束两小时后由 Worker 清理；永久方案与累计统计不自动过期。任务状态链接过期不等于仍有效的审核地址失效，应保存审核地址并及时下载。
+
+## 维护与备份
+
+| 数据 | 管理方式 |
+|---|---|
+| `var/profiles.sqlite3` 和 `var/profiles/<id>/<version>/` | 索引、规则和模板共同构成永久方案，必须一起备份 |
+| `var/tasks.sqlite3` 与 `var/tasks/` | 短期任务状态、候选事件、输入和模板；不要运行中清空 |
+| 快照及同级 `*-adaptations/` | 审核的 DOCX/PDF/来源副本及短期适配草稿，按上述周期清理 |
+| `var/stats.sqlite3`、`.key` | 匿名统计和去重密钥一起保留；删除会丢失统计或去重一致性 |
+| `*-wal`、`*-shm` | SQLite 自身管理，运行中不要手动删除 |
+| `var/logs/`、`var/run/` | 部署方式按需使用，不保证一定存在或持续更新 |
+| `outputs/` | CLI 或测速生成结果，由使用者决定保留 |
+
+`python scripts/manage_profiles.py` 提供查询、搜索、最近使用、详情、重命名和确认删除菜单。方案无账户隔离，服务器共享；删除需完整 ID，活跃任务引用会阻止删除。更新或删除方案不会改写已生成会话的冻结规则。备份方案时停止方案写入或持有文件锁；SQLite 使用 backup API，不仅复制可能未落盘的主库。不要把 Key、业务正文或运行数据加入 Git。
+
+## 排查
+
+- **一直排队**：Gunicorn 的 worker 是 Web 子进程；用 `pgrep -af 'sheetweave_agent.task_worker'` 确认独立任务进程，核对两端 Python、`.env`、路径、权限和并发容量。HTTP 202 仅表示已入队。
+- **模型慢**：比较排队耗时与执行耗时；检查批次大小、上游响应、重试和自动修正。可用 `scripts/benchmark_timing.py` 对合成数据计时，不发送真实周报。
+- **任务中断**：队列用租约识别故障，不自动重放可能计费的外部调用；刷新状态后核对结果。发布时可能跨快照/队列存储部分成功，先确认审核版本。
+- **版本冲突**：编辑、重生成、PDF 绑定 revision，过时请求返回 409；刷新后再操作，不覆盖新版本。
+- **PDF 不可用**：确认 LibreOffice 路径、转换权限、超时及字体；不会自动安装软件，不影响 DOCX 下载。
+- **会话过期**：查看审核页到期时间。修改 TTL 后需重新生成，不能恢复已过期文件；重新部署后保持存储路径一致。
+- **模块不存在**：确认环境、路径和 editable 安装指向新目录。实际入口为 `sheetweave_agent`，不要直接执行 `python src/web.py`。
+
+## 回归范围
+
+`tests/` 保留核心解析、规范化/语义分段、LLM 合约与事实保护、方案生命周期、队列、审核、Word 列表、文档安全/PDF 和服务/统计测试。删除旧流式页面、重复入口断言、历史菜单变体和依赖本地业务文件的测试；状态列完成规则等仍在使用的行为保留代表用例。所有模型调用使用 Mock，写入临时目录。运行 `python -m pytest`、`ruff check .`、`ruff format --check .`，实际结果以当前运行记录为准。
+
+
+## 公司网关超时诊断
+
+短请求成功只证明基础链路可用。历史任务约 120 秒失败与旧客户端“两次 60 秒等待”吻合，但无法仅凭错误判断网关排队、长生成、响应正文停滞或模型容量。当前版本不自动重发超时或已收到响应头后中断的请求，避免上游仍在生成时重复计费/排队；HTTP 429/5xx 和部分连接错误仍按配置有限重试。`LLM_TIMEOUT` 是 urllib 的阻塞等待阈值，不是硬性的完整请求/任务总时限。
+
+Worker 终端或现有 systemd journal 会输出 JSON 诊断行。沿同一 `task_id`，查看：
+
+| 事件 / stage | 含义 |
+|---|---|
+| `worker_enter` | 任务被后台接手，区别于排队 |
+| `prepare_ir` | 表格、映射和 IR 准备耗时 |
+| `llm_plan` / `llm_batch_input` | 批次数、并发数、区块数、实际消息字符数及是否单块超限 |
+| `http_start` | 模型、实际请求体字节数、等待阈值、尝试次数与上限 |
+| `http_headers` | 已收到响应头及其耗时，随后开始读取完整非流式响应 |
+| `http_end` | 成败、HTTP 状态、响应字节数、耗时、异常类型及是否重试 |
+| `response_parse` / `fact_validation` | 模型内容结构解析与本地事实校验 |
+| `docx_render_validate` | DOCX 渲染和格式验证 |
+| `task_failure` / `task_result` | 失败类型及最终队列状态；`stage_end(task)` 只表示执行器已返回，成败以 `task_result.state` 为准 |
+
+方案辅助识别与可选自动修正有各自的请求组织方式，不受首次规范润色批次预算限制；排查时保持 `LLM_AUTO_CORRECT=false`。
+
+每条事件包含 UTC 时间；批次线程继承任务 ID，HTTP 事件关联 `batch`、`batches` 和 `blocks`。字符数用于比较输入规模，不冒充精确 token 数。日志不包含 Key、URL、请求头、Prompt、原始数据、模型输出或底层异常消息。
+
+- `http_end.stage=await_headers`：等待响应头期间失败，包括 DNS、连接、TLS、网关等待及模型首响应；不能仅凭它断言模型已经开始计算。
+- `stage=read_body`：已经收到响应头，读取正文失败或超时。
+- `stage=decode_response`：完整 HTTP 响应已读完，解析或响应封装有问题。
+- `cause_type=TimeoutError`：超时不自动重试；`status=401/403` 优先检查模型授权；`429/503` 优先检查网关容量。
+- `oversized=true`：单个合并审核区块或固定提示词已超过预算。调整方案分组/输入范围，或结合网关能力评估等待阈值，继续减小预算不会拆开该区块。
+
+首次定位建议保留 `LLM_TIMEOUT=60`，设置 `LLM_MAX_RETRIES=0`、`LLM_MAX_BATCH_CHARS=6000`、`LLM_MAX_CONCURRENCY=1`，先隔离长请求、重复请求和并发竞争；这些是诊断起点，不是对所有网关的性能保证。每份报告可并发 1 批不代表全站只有 1 个上游请求：`TASK_MAX_CONCURRENCY` 仍限制并行任务数量。观察成功请求耗时和网关限制后，再逐项调整并发或等待阈值；不要同时修改全部参数后直接宣称根因已修复。
+
+现有测速脚本仅生成合成数据，可复用真实解析、LLM、DOCX 渲染/校验流程。先进行无需 API 的原文基线：
+
+```bash
+python scripts/benchmark_timing.py --mode original --rows 7 --output /tmp/original-timing.json
+```
+
+在配置公司 API 的机器上，依次执行下列对比；每条命令都可能产生费用，上一项失败时先看日志，避免重复整组执行。`--allow-external` 明确允许将**合成数据**交给所配置的 API，脚本不会读取真实周报：
+
+```bash
+# 少量区块
+python scripts/benchmark_timing.py --real --allow-external --env-file .env \
+  --rows 1 --max-concurrency 1 --output /tmp/llm-small.json
+# 同一份 12 行合成输入：较大批次、单并发
+python scripts/benchmark_timing.py --real --allow-external --env-file .env \
+  --rows 12 --max-batch-chars 12000 --max-concurrency 1 --output /tmp/llm-large.json
+# 同样输入：缩小批次、单并发；以输出的 llm_batches 为准
+python scripts/benchmark_timing.py --real --allow-external --env-file .env \
+  --rows 12 --max-batch-chars 4000 --max-concurrency 1 --output /tmp/llm-split.json
+# 仅前项稳定后比较双并发
+python scripts/benchmark_timing.py --real --allow-external --env-file .env \
+  --rows 12 --max-batch-chars 4000 --max-concurrency 2 --output /tmp/llm-parallel.json
+```
+
+以上 JSON 只保存计时、数量和错误类型，不保存输入输出正文。模型首次生成可能被事实校验回退；`success=true` 表示链路和 DOCX 校验完成，`validation_counts` 还需判断候选是否被采用。
+
+systemd 部署更新代码及 `.env` 后，使用现有服务重启，不修改服务架构：
+
+```bash
+sudo systemctl restart sheetweaveagent.service
+journalctl -u sheetweaveagent.service --since "10 minutes ago" -o cat
+```
+
+提交一份获准处理的报告，确认 `worker_enter → prepare_ir → llm_plan → http_start/http_end → response_parse → fact_validation → docx_render_validate → task_result(state=succeeded)`；失败时保留同一任务的脱敏诊断行。部署机的真实业务请求尚需实测，不能用本地模拟网关的成功推断公司模型已稳定。
