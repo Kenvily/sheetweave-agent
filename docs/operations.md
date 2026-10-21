@@ -45,6 +45,8 @@ DOCX 使用原生三级正文列表及关联样式，每个目录隔离编号定
 
 推荐使用 [README](../README.md) 的统一入口：默认 2 个 gthread Web 进程、每进程 2 个请求线程，另有独立后台任务进程。日志输出当前终端；未安装开机自启或外部进程守护。端口被占用时启动会失败。
 
+Web 进程数统一在 `gunicorn.conf.py` 的 `workers` 中配置，当前为 `2`。统一入口默认沿用该值，只有显式使用 `python -m sheetweave_agent.server --workers N` 才通过命令行覆盖；直接启动 Gunicorn 时的 `--workers N` 也会覆盖文件值。它控制 Web 进程，不改变后台 `TASK_MAX_CONCURRENCY`。
+
 需要分开管理时，**两个终端必须加载相同配置**：
 
 ```bash
@@ -52,7 +54,7 @@ conda activate py31115
 cd ~/SheetWeaveAgent
 set -a; source .env; set +a            # 仅加载自己信任的本地配置
 # 终端一：
-gunicorn --config gunicorn.conf.py --workers 2 --worker-class gthread --threads 2 \
+gunicorn --config gunicorn.conf.py --worker-class gthread --threads 2 \
   --bind 127.0.0.1:18989 'sheetweave_agent.web:create_app()'
 # 终端二：执行相同环境配置后
 python -m sheetweave_agent.task_worker
@@ -82,6 +84,32 @@ python -m sheetweave_agent.task_worker
 | `PDF_PREVIEW_TIMEOUT` | `45` 秒，PDF 转换超时 |
 
 通用 `LLM_*` 未设置时兼容旧 `DEEPSEEK_*`；显式空值不会回退旧值。Key 不会显示在网页中。不要未经授权发送公司内容；方案识别需确认脱敏和外发权限，CLI 模型模式需 `--allow-external`。
+
+### 模型等待与 Web Worker 超时
+
+**部署时分别检查 `.env` 的 `LLM_TIMEOUT` 与 `gunicorn.conf.py` 的超时设置，它们作用于不同进程和阶段。** 公司内部推理模型可能在开始返回正文前思考较久；真实内容的耗时不能用一个简单 JSON 测试替代。若已确认模型仍在正常推理，可按实际耗时留出余量，例如：
+
+```dotenv
+# 示例：允许较慢的内部模型等待 5 分钟；不是默认值或通用推荐值。
+LLM_TIMEOUT=300
+```
+
+| 配置位置 | 当前默认 / 设置值 | 作用与调整依据 |
+|---|---|---|
+| `.env`：`LLM_TIMEOUT` | 代码默认 `60` 秒 | 上游 HTTP 连接和阻塞读取的等待阈值。非流式可能等推理及正文生成完成才返回响应头；根据真实请求耗时和网关能力设置余量。多个批次、重试或修正可能使整份任务耗时更长；持续有数据的流式请求也可能超过该数值。 |
+| `gunicorn.conf.py`：`timeout` | 文件当前为 `180` 秒 | Web Worker 长时间未向主进程报告存活时被杀死并重启。当前 `gthread` 有独立心跳，不是单个 HTTP 请求的固定时长上限。若改用 `sync` Worker，长同步请求可能触发该限制，应为完整同步处理时间留出余量。 |
+| `gunicorn.conf.py`：`graceful_timeout` | 文件当前为 `180` 秒 | Gunicorn 优雅关闭/重启时等待 Web 请求完成的时间，不是正常运行期间的模型等待上限；也不管理独立任务 Worker。 |
+| `src/server.py`：统一入口关闭等待 | 当前 `190` 秒 | 收到停止信号后同时通知 Web 和任务 Worker，超过该时间仍未退出会被强制终止。它不随以上两项配置自动增加，目前也没有对应环境变量或 CLI 参数。 |
+
+当前队列路径是浏览器提交任务后短轮询，LLM 请求由独立任务 Worker 执行。仅提高 Gunicorn `timeout` **不能修复后台 LLM 超时**；只提高 `LLM_TIMEOUT` 也不能防止 Web Worker 失去心跳、上游网关主动断开连接或部署平台强制停止服务。对于此路径，`LLM_TIMEOUT=300` 与 Gunicorn `timeout=180` 并不矛盾，无需强制将后者调得更大。
+
+若使用 `/preview`、`/generate` 等同步入口，应同时核对 Web Worker 类型、完整请求耗时及实际反向代理/客户端的超时；`gthread` 的长请求仍会占用请求线程。不要把 Worker 心跳超时当成接口调用的硬截止时间，也不要仅为等待模型而关闭所有超时保护。
+
+修改 `.env` 后重启 **Web 与独立任务 Worker**；修改 `gunicorn.conf.py` 后重启 Gunicorn。统一入口会加载该配置文件，Gunicorn 命令行参数可覆盖文件值，分开启动时应显式使用 `--config gunicorn.conf.py`。沿用现有 systemd 服务的部署可执行 `sudo systemctl restart sheetweaveagent.service`，单纯修改上述两份文件不需要 `daemon-reload`；仅修改 unit/override 时才需要重新加载 systemd 配置。
+
+**提高模型等待时间后，还要考虑停止/重启时的任务。** 例如模型允许等待 300 秒，但统一入口最多等待关闭 190 秒，运行中的任务仍可能在重启时被打断；systemd 实际设置的 `TimeoutStopSec` 也可能更早结束服务。尽量在无运行任务时重启，如需保证更长的优雅关闭，应另行核对并调整部署关闭策略，不能只修改 Gunicorn `graceful_timeout`。队列租约负责识别中断，不会无条件重放可能计费的调用。
+
+诊断工具 `scripts/diagnose_llm.py` 有独立的 `--timeout`、`--deadline` 和 `--total-timeout`：默认分别为 15、20、60 秒，socket 阈值还会取其与 Worker `LLM_TIMEOUT` 的较小值。生产环境调大 `LLM_TIMEOUT` 后，诊断脚本仍可能提前截止，应显式调整这些参数并区别 `wall_deadline` 与 `socket_timeout`。当前脚本每个时间参数上限为 180 秒，不能直接照抄大于 180 秒的生产值；更长调用应结合实际 Worker 日志观察。
 
 ### 会话、队列与存储
 
@@ -143,7 +171,7 @@ REPORT_SESSION_TTL=24h
 
 ## 公司网关超时诊断
 
-短请求成功只证明基础链路可用。历史任务约 120 秒失败与旧客户端“两次 60 秒等待”吻合，但无法仅凭错误判断网关排队、长生成、响应正文停滞或模型容量。当前版本不自动重发超时或已收到响应头后中断的请求，避免上游仍在生成时重复计费/排队；HTTP 429/5xx 和部分连接错误仍按配置有限重试。`LLM_TIMEOUT` 是 urllib 的阻塞等待阈值，不是硬性的完整请求/任务总时限。
+短请求成功只证明基础链路可用，推理型模型处理真实周报可能超过默认 60 秒。已在内部部署观察到模型持续返回推理而迟迟没有正文，提高 `LLM_TIMEOUT` 后能够完成生成；遇到类似情况，应根据实际模型耗时配置等待时间，参见上面的超时说明。其他部署仍需通过阶段日志区分网关排队、长生成和响应停滞，不能把所有超时都归因于同一原因。当前版本不自动重发超时或已收到响应头后中断的请求，避免上游仍在生成时重复计费/排队；HTTP 429/5xx 和部分连接错误仍按配置有限重试。`LLM_TIMEOUT` 是 urllib 的阻塞等待阈值，不是硬性的完整请求/任务总时限。
 
 Worker 终端或现有 systemd journal 会输出 JSON 诊断行。沿同一 `task_id`，查看：
 
@@ -169,7 +197,7 @@ Worker 终端或现有 systemd journal 会输出 JSON 诊断行。沿同一 `tas
 - `cause_type=TimeoutError`：超时不自动重试；`status=401/403` 优先检查模型授权；`429/503` 优先检查网关容量。
 - `oversized=true`：单个合并审核区块或固定提示词已超过预算。调整方案分组/输入范围，或结合网关能力评估等待阈值，继续减小预算不会拆开该区块。
 
-首次定位建议保留 `LLM_TIMEOUT=60`，设置 `LLM_MAX_RETRIES=0`、`LLM_MAX_BATCH_CHARS=6000`、`LLM_MAX_CONCURRENCY=1`，先隔离长请求、重复请求和并发竞争；这些是诊断起点，不是对所有网关的性能保证。每份报告可并发 1 批不代表全站只有 1 个上游请求：`TASK_MAX_CONCURRENCY` 仍限制并行任务数量。观察成功请求耗时和网关限制后，再逐项调整并发或等待阈值；不要同时修改全部参数后直接宣称根因已修复。
+`LLM_TIMEOUT` 应按真实模型耗时设置，不要求固定为 60 秒。需要进一步隔离问题时，可暂设 `LLM_MAX_RETRIES=0`、`LLM_MAX_BATCH_CHARS=6000`、`LLM_MAX_CONCURRENCY=1`，比较长请求、重复请求和并发竞争；这些仅是诊断起点，已稳定的部署无需照抄，也不保证适用于所有网关。每份报告可并发 1 批不代表全站只有 1 个上游请求：`TASK_MAX_CONCURRENCY` 仍限制并行任务数量。观察成功请求耗时和网关限制后，再逐项调整并发或等待阈值；不要同时修改全部参数后直接宣称根因已修复。
 
 现有测速脚本仅生成合成数据，可复用真实解析、LLM、DOCX 渲染/校验流程。先进行无需 API 的原文基线：
 
@@ -203,4 +231,4 @@ sudo systemctl restart sheetweaveagent.service
 journalctl -u sheetweaveagent.service --since "10 minutes ago" -o cat
 ```
 
-提交一份获准处理的报告，确认 `worker_enter → prepare_ir → llm_plan → http_start/http_end → response_parse → fact_validation → docx_render_validate → task_result(state=succeeded)`；失败时保留同一任务的脱敏诊断行。部署机的真实业务请求尚需实测，不能用本地模拟网关的成功推断公司模型已稳定。
+提交一份获准处理的报告，确认 `worker_enter → prepare_ir → llm_plan → http_start/http_end → response_parse → fact_validation → docx_render_validate → task_result(state=succeeded)`；失败时保留同一任务的脱敏诊断行。上线验收应以部署机真实请求的实际结果为准，不能用短请求或本地模拟网关的成功代替。

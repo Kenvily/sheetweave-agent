@@ -17,6 +17,16 @@ python -m sheetweave_agent.server --host 127.0.0.1 --port 18989
 
 访问 `http://127.0.0.1:18989`。统一入口读取 `.env`，同时启动 Web 和独立任务 Worker；Ctrl+C 协调关闭两者。远程访问、分开启动及完整配置见 [项目与运维说明](docs/operations.md)。
 
+Web 进程数在 `gunicorn.conf.py` 的 `workers` 中设置，当前为 `2`，修改后重启服务生效。统一入口仅在显式传入 `--workers N` 时覆盖该值；后台任务并发仍由 `.env` 的 `TASK_MAX_CONCURRENCY` 控制。
+
+## 部署时检查超时
+
+`LLM_TIMEOUT` 在 `.env` 中设置，单位为秒，默认 `60`。公司 API 或推理模型处理真实报告可能超过一分钟：短测试成功、正式报告超时时，应结合实际生成耗时调整，例如 `LLM_TIMEOUT=300`，并重启 Web 和后台 Worker。这是等待阈值，不会让模型生成更快。
+
+同时检查 `gunicorn.conf.py`：当前 `timeout=180` 是 Web Worker 无响应/心跳超时，`graceful_timeout=180` 是优雅关闭等待时间。当前使用 `gthread`，生成任务由独立 Worker 执行，**Gunicorn 的 `timeout` 不限制后台模型调用，也不要求机械地大于 `LLM_TIMEOUT`**。同步入口、改用 `sync` Worker 或重启服务时需另外核对相关时限；统一启动器关闭等待上限为 190 秒。
+
+两处配置的作用、调整与重启注意事项见[超时配置说明](docs/operations.md#模型等待与-web-worker-超时)。
+
 ## 使用
 
 1. 在“方案适配”上传脱敏样例及可选 DOCX，核对识别结果，验证并保存方案。

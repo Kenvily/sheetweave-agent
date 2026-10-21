@@ -153,3 +153,50 @@ def test_stats_support_concurrent_shared_sqlite_writers(tmp_path: Path) -> None:
     with ThreadPoolExecutor(max_workers=8) as executor:
         assert all(executor.map(record, range(24)))
     assert stores[0].metrics().total_generations == 24
+
+
+@pytest.mark.parametrize("configured,override,expected", [(5, None, 5), (5, 3, 3)])
+def test_launcher_uses_configured_workers_unless_explicitly_overridden(
+    tmp_path, monkeypatch, configured, override, expected
+):
+    from unittest.mock import MagicMock
+
+    from gunicorn.app.wsgiapp import WSGIApplication
+
+    from sheetweave_agent import server
+
+    (tmp_path / "gunicorn.conf.py").write_text(f"workers = {configured}\n")
+    monkeypatch.setattr(server, "ROOT", tmp_path)
+    monkeypatch.setattr(server.socket, "socket", MagicMock())
+    monkeypatch.setattr(
+        server.socket,
+        "getaddrinfo",
+        lambda *_args, **_kwargs: [
+            (server.socket.AF_INET, server.socket.SOCK_STREAM, 0, "", ("127.0.0.1", 18989))
+        ],
+    )
+    captured = []
+
+    def run_services(web, worker, **kwargs):
+        captured.extend(web)
+        return 0
+
+    monkeypatch.setattr(server, "run_services", run_services)
+    argv = ["server", "--no-env"]
+    if override is not None:
+        argv.extend(["--workers", str(override)])
+    monkeypatch.setattr(sys, "argv", argv)
+    assert server.main() == 0
+    assert ("--workers" in captured) == (override is not None)
+    monkeypatch.setattr(sys, "argv", ["gunicorn", *captured[3:]])
+    assert WSGIApplication().cfg.workers == expected
+
+
+@pytest.mark.parametrize("count", ["0", "-1"])
+def test_launcher_rejects_invalid_worker_override(monkeypatch, count):
+    from sheetweave_agent import server
+
+    monkeypatch.setattr(sys, "argv", ["server", "--workers", count])
+    with pytest.raises(SystemExit) as result:
+        server.main()
+    assert result.value.code == 2
