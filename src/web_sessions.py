@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 import re
 import secrets
 import shutil
+import tempfile
 import time
 from collections.abc import Iterator
 from contextlib import contextmanager, suppress
@@ -52,6 +54,7 @@ class ReportSession:
     model: str | None
     download_name: str
     revision: int
+    expires_at: float
     template_path: Path
     report_path: Path
     pdf_path: Path | None
@@ -73,6 +76,40 @@ class SnapshotStore:
         with suppress(OSError):
             self.root.chmod(0o700)
 
+    @classmethod
+    def from_environment(cls, root: Path | None = None) -> SnapshotStore:
+        """Use identical session configuration in Web and independent workers."""
+        value = os.environ.get("REPORT_SESSION_TTL")
+        if value is None:
+            # Legacy installations may still provide an integer number of seconds.
+            legacy = os.environ.get("REPORT_SESSION_TTL_SECONDS", "").strip()
+            try:
+                ttl = int(legacy) if legacy else DEFAULT_SNAPSHOT_TTL_SECONDS
+            except ValueError as exc:
+                raise ValueError("REPORT_SESSION_TTL_SECONDS 必须是正整数（秒）。") from exc
+            if ttl <= 0:
+                raise ValueError("REPORT_SESSION_TTL_SECONDS 必须是正整数（秒）。")
+        else:
+            value = value.strip() or "2h"
+            match = re.fullmatch(r"([0-9]+)[ \t]*(h|d|w|小时|天|周)", value, re.IGNORECASE)
+            if match is None or int(match[1]) <= 0:
+                raise ValueError("REPORT_SESSION_TTL 请使用正整数加小时/天/周，例如 2h、3d、1w。")
+            units = {"h": 3600, "小时": 3600, "d": 86400, "天": 86400, "w": 604800, "周": 604800}
+            ttl = int(match[1]) * units[match[2].lower()]
+        directory = root or Path(
+            os.environ.get("WEEKLY_REPORT_SNAPSHOT_DIR", "").strip()
+            or str(Path(tempfile.gettempdir()) / "weekly-report-agent-snapshots")
+        )
+        return cls(directory, ttl_seconds=ttl)
+
+    @property
+    def retention_label(self) -> str:
+        """Present the configured lifetime without rounding its duration."""
+        for unit, divisor in (("周", 604800), ("天", 86400), ("小时", 3600), ("分钟", 60)):
+            if self.ttl_seconds % divisor == 0:
+                return f"{self.ttl_seconds // divisor} {unit}"
+        return f"{self.ttl_seconds} 秒"
+
     def cleanup_expired(self, now: float | None = None) -> None:
         """Remove stale snapshots without following links outside the store."""
         current = time.time() if now is None else now
@@ -85,7 +122,19 @@ class SnapshotStore:
                 stat = entry.lstat()
             except OSError:
                 continue
-            if current - stat.st_mtime <= self.ttl_seconds:
+            expires_at = stat.st_mtime + self.ttl_seconds
+            if entry.is_dir() and not entry.is_symlink():
+                # A config change applies to new sessions, never retroactively to saved ones.
+                metadata = entry / "state.json"
+                if not metadata.is_file():
+                    metadata = entry / "metadata.json"
+                try:
+                    stored = float(json.loads(metadata.read_text(encoding="utf-8"))["expires_at"])
+                    if math.isfinite(stored):
+                        expires_at = stored
+                except (OSError, ValueError, TypeError, KeyError):
+                    pass  # Incomplete artifacts use the age-based fallback.
+            if current <= expires_at:
                 continue
             try:
                 if entry.is_symlink() or not entry.is_dir():
@@ -196,7 +245,7 @@ class SnapshotStore:
 
     def _directory(self, token: str) -> Path:
         if not TOKEN_PATTERN.fullmatch(token):
-            raise ValueError("周报预览链接无效或已经过期，请重新预览。")
+            raise ValueError("文档预览链接无效或已经过期，请重新预览。")
         return self.root / token
 
     @contextmanager
@@ -249,14 +298,15 @@ class SnapshotStore:
                 model=state.get("model"),
                 download_name=self._safe_download_name(state["download_name"]),
                 revision=revision,
+                expires_at=float(state["expires_at"]),
                 template_path=template_path,
                 report_path=report_path,
                 pdf_path=self._valid_pdf_path(directory, revision),
             )
         except (KeyError, TypeError, ValueError) as exc:
-            raise ValueError("周报编辑会话无效或已经过期，请重新预览。") from exc
+            raise ValueError("文档编辑会话无效或已经过期，请重新预览。") from exc
         if not report_path.is_file() or not template_path.is_file():
-            raise ValueError("周报编辑会话无效或已经过期，请重新预览。")
+            raise ValueError("文档编辑会话无效或已经过期，请重新预览。")
         return session
 
     def _read_state(self, directory: Path) -> dict[str, Any]:
@@ -264,10 +314,10 @@ class SnapshotStore:
             state = json.loads((directory / "state.json").read_text(encoding="utf-8"))
             expires_at = float(state["expires_at"])
         except (OSError, ValueError, TypeError, KeyError, json.JSONDecodeError) as exc:
-            raise ValueError("周报编辑会话无效或已经过期，请重新预览。") from exc
-        if expires_at < time.time():
+            raise ValueError("文档编辑会话无效或已经过期，请重新预览。") from exc
+        if not math.isfinite(expires_at) or expires_at < time.time():
             shutil.rmtree(directory, ignore_errors=True)
-            raise ValueError("周报编辑会话已经过期，请重新预览。")
+            raise ValueError("文档编辑会话已经过期，请重新预览。")
         return state
 
     def update_session(
@@ -357,10 +407,10 @@ class SnapshotStore:
             expires_at = float(metadata["expires_at"])
             download_name = self._safe_download_name(metadata["download_name"])
         except (OSError, ValueError, TypeError, KeyError, json.JSONDecodeError) as exc:
-            raise ValueError("周报预览链接无效或已经过期，请重新预览。") from exc
-        if expires_at < time.time() or not report_path.is_file():
+            raise ValueError("文档预览链接无效或已经过期，请重新预览。") from exc
+        if not math.isfinite(expires_at) or expires_at < time.time() or not report_path.is_file():
             shutil.rmtree(directory, ignore_errors=True)
-            raise ValueError("周报预览已经过期，请重新预览。")
+            raise ValueError("文档预览已经过期，请重新预览。")
         return ReportSnapshot(report_path, download_name)
 
 

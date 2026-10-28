@@ -10,6 +10,7 @@ from pathlib import Path
 from .llm import ContentMode, LLMService
 from .rules import load_rule_preset, preset_payload, validate_rule_preset
 from .service import prepare_report, process_report, render_prepared_report
+from .timing import measure
 from .web_sessions import SnapshotStore
 
 
@@ -33,35 +34,38 @@ def generate_snapshot(
     report_date = date.fromisoformat(options["report_date"])
     mode = ContentMode(options["content_mode"])
     progress("正在解析表格与规则。")
-    prepared, preset = prepare_report(
-        input_path,
-        preset_id=preset.id,
-        preset=preset,
-        requested_week=options.get("week"),
-        sheet=options.get("sheet"),
-        field_mapping=options.get("field_mapping"),
-        display_filename=options["filename"],
-    )
+    with measure(None, "prepare_ir"):
+        prepared, preset = prepare_report(
+            input_path,
+            preset_id=preset.id,
+            preset=preset,
+            requested_week=options.get("week"),
+            sheet=options.get("sheet"),
+            field_mapping=options.get("field_mapping"),
+            display_filename=options["filename"],
+        )
     progress("正在规范化原文。" if mode is ContentMode.ORIGINAL else "正在生成候选内容，尚未校验。")
-    prepared = process_report(
-        prepared,
-        mode,
-        custom_instruction=options.get("custom_instruction"),
-        model=options.get("model"),
-        llm_service=llm_service,
-        on_delta=on_delta,
-    )
+    with measure(None, "llm_process"):
+        prepared = process_report(
+            prepared,
+            mode,
+            custom_instruction=options.get("custom_instruction"),
+            model=options.get("model"),
+            llm_service=llm_service,
+            on_delta=on_delta,
+        )
     progress("候选已完成校验，正在生成并验证 DOCX。")
     with tempfile.TemporaryDirectory(prefix="weekly-report-task-render-") as directory:
         output = Path(directory) / "report.docx"
-        render_prepared_report(
-            prepared,
-            preset,
-            template_path,
-            output,
-            report_date,
-            options["section_number"],
-        )
+        with measure(None, "docx_render_validate"):
+            render_prepared_report(
+                prepared,
+                preset,
+                template_path,
+                output,
+                report_date,
+                options["section_number"],
+            )
         progress("DOCX 验证通过，正在保存审核快照。")
         before_publish()
         return snapshots.create_session(

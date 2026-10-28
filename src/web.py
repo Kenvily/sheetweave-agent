@@ -14,9 +14,10 @@ import tempfile
 import zipfile
 from collections.abc import Sequence
 from contextlib import nullcontext
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 from xml.etree import ElementTree as ET
+from zoneinfo import ZoneInfo
 
 from flask import (
     Flask,
@@ -208,10 +209,7 @@ def create_app(
     configured_template = template_path or Path(
         os.environ.get("WEEKLY_REPORT_TEMPLATE", DEFAULT_TEMPLATE)
     )
-    snapshot_root = Path(
-        os.environ.get("WEEKLY_REPORT_SNAPSHOT_DIR", "").strip()
-        or str(Path(tempfile.gettempdir()) / "weekly-report-agent-snapshots")
-    )
+    configured_snapshots = snapshot_store or SnapshotStore.from_environment()
     configured_stats = usage_stats
     if configured_stats is None:
         try:
@@ -225,15 +223,26 @@ def create_app(
         MAX_CONTENT_LENGTH=MAX_UPLOAD_SIZE,
         REPORT_TEMPLATE_PATH=configured_template.resolve(),
         LLM_SERVICE=llm_service,
-        SNAPSHOT_STORE=snapshot_store or SnapshotStore(snapshot_root),
+        SNAPSHOT_STORE=configured_snapshots,
         PDF_PREVIEW_SERVICE=pdf_preview_service or PdfPreviewService.from_environment(),
         USAGE_STATS=configured_stats,
         TASK_QUEUE=task_queue or TaskQueue.from_environment(),
         PROFILE_STORE=profile_store or ProfileStore.from_environment(),
-        ADAPTATION_ROOT=snapshot_root.with_name(snapshot_root.name + "-adaptations"),
+        ADAPTATION_ROOT=configured_snapshots.root.with_name(
+            configured_snapshots.root.name + "-adaptations"
+        ),
     )
 
     app.register_blueprint(profiles_ui)
+
+    @app.context_processor
+    def session_configuration():
+        return {"session_retention_label": app.config["SNAPSHOT_STORE"].retention_label}
+
+    @app.template_filter("session_expiry")
+    def session_expiry(timestamp: float) -> str:
+        zone = getattr(configured_stats, "timezone", ZoneInfo("Asia/Shanghai"))
+        return datetime.fromtimestamp(timestamp, zone).strftime("%m-%d %H:%M")
 
     def available_presets():
         store = app.config["PROFILE_STORE"]
@@ -250,7 +259,7 @@ def create_app(
                 preset, template, metadata = store.load(preset_id)
                 g.report_profile = (preset, template.read_bytes(), metadata["version"])
             return preset
-        raise ValueError("请先新建并保存方案，再选择已保存方案生成周报。")
+        raise ValueError("请先新建并保存方案，再选择已保存方案生成文档。")
 
     def safe_metrics() -> UsageMetrics:
         service = app.config.get("USAGE_STATS")
@@ -488,8 +497,8 @@ def create_app(
 
     def save_input(upload: FileStorage, workdir: Path) -> Path:
         if not upload.filename:
-            raise ValueError("请选择周报 CSV 或 XLSX 文件。")
-        suffix = _require_extension(upload.filename, SUPPORTED_INPUT_SUFFIXES, "周报数据")
+            raise ValueError("请选择 CSV 或 XLSX 数据文件。")
+        suffix = _require_extension(upload.filename, SUPPORTED_INPUT_SUFFIXES, "表格数据")
         input_path = workdir / f"input{suffix}"
         upload.save(input_path)
         return input_path
@@ -533,7 +542,7 @@ def create_app(
         upload = _data_upload()
         try:
             if upload is None:
-                raise ValueError("请选择周报 CSV 或 XLSX 文件。")
+                raise ValueError("请选择 CSV 或 XLSX 数据文件。")
             preset = selected_preset(request.form.get("preset", ""))
             with tempfile.TemporaryDirectory(prefix="weekly-report-options-") as directory:
                 input_path = save_input(upload, Path(directory))
@@ -547,6 +556,7 @@ def create_app(
                 selected_sheet=options.selected_sheet,
                 weeks=options.weeks,
                 default_week=options.default_week,
+                notice=options.notice,
                 section_default=preset.document.heading_start_default,
             )
         except (FileNotFoundError, OSError, ValueError, zipfile.BadZipFile) as exc:
@@ -581,7 +591,7 @@ def create_app(
         """Compatibility synchronous preview; the homepage uses queued tasks."""
         upload = _data_upload()
         if upload is None:
-            raise ValueError("请选择周报 CSV 或 XLSX 文件。")
+            raise ValueError("请选择 CSV 或 XLSX 数据文件。")
         options = generation_options(upload)
         with tempfile.TemporaryDirectory(prefix="weekly-report-preview-") as directory:
             workdir = Path(directory)
@@ -627,7 +637,7 @@ def create_app(
         try:
             upload = _data_upload()
             if upload is None:
-                raise ValueError("请选择周报 CSV 或 XLSX 文件。")
+                raise ValueError("请选择 CSV 或 XLSX 数据文件。")
             options = generation_options(upload)
             if options["content_mode"] != "original":
                 service = app.config.get("LLM_SERVICE") or LLMService(load_llm_config())
@@ -741,7 +751,7 @@ def create_app(
         try:
             upload = _data_upload()
             if upload is None:
-                raise ValueError("请选择周报 CSV 或 XLSX 文件。")
+                raise ValueError("请选择 CSV 或 XLSX 数据文件。")
             saved_input = save_input(upload, Path(upload_work.name))
             saved_template = selected_template(Path(upload_work.name))
         except (OSError, ValueError, zipfile.BadZipFile) as exc:
@@ -970,7 +980,7 @@ def create_app(
         upload = _data_upload()
         try:
             if upload is None:
-                raise ValueError("请选择周报 CSV 或 XLSX 文件。")
+                raise ValueError("请选择 CSV 或 XLSX 数据文件。")
             preset = selected_preset(request.form.get("preset", ""))
             report_date = _parse_date(request.form.get("report_date", ""))
             section_number = _parse_section_number(request.form.get("section_number", ""), preset)
@@ -1036,7 +1046,7 @@ def create_app(
 
 def build_parser() -> argparse.ArgumentParser:
     """Build the web server command-line parser."""
-    parser = argparse.ArgumentParser(description="启动周报生成页面。")
+    parser = argparse.ArgumentParser(description="启动文档生成页面。")
     parser.add_argument("--host", default="127.0.0.1", help="监听地址")
     parser.add_argument("--port", type=int, default=8000, help="监听端口")
     parser.add_argument("--template", type=Path, help="默认 DOCX 模板路径")

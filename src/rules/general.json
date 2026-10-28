@@ -1,6 +1,6 @@
 {
   "id": "general",
-  "name": "通用周报",
+  "name": "通用文档",
   "schema_version": 1,
   "input": {
     "layout": "records",
@@ -19,7 +19,7 @@
     {"id": "next_plan", "title": "下周计划", "source_field": "next_plan", "llm_editable": false, "group_by": "project"}
   ],
   "document": {
-    "report_title": "通用周报",
+    "report_title": "通用文档",
     "template": "研发三部周报模板-v2.docx",
     "heading_start_default": 1
   }

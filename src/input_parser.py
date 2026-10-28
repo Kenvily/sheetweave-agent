@@ -27,6 +27,7 @@ class InputOptions:
     selected_sheet: str | None = None
     weeks: tuple[str, ...] = ()
     default_week: str | None = None
+    notice: str | None = None
 
 
 class InputFormatError(ValueError):
@@ -75,7 +76,9 @@ def list_xlsx_sheets(path: Path) -> tuple[str, ...]:
         workbook.close()
 
 
-def _read_xlsx(path: Path, sheet: str | None) -> tuple[list[list[str]], str, tuple[str, ...]]:
+def _read_xlsx(
+    path: Path, sheet: str | None, *, preferred_sheet: str | None = None, allow_empty: bool = False
+) -> tuple[list[list[str]], str, tuple[str, ...]]:
     try:
         from openpyxl import load_workbook
         from openpyxl.utils.exceptions import InvalidFileException
@@ -89,7 +92,7 @@ def _read_xlsx(path: Path, sheet: str | None) -> tuple[list[list[str]], str, tup
         available = tuple(workbook.sheetnames)
         if not available:
             raise InputFormatError("XLSX 不包含工作表。")
-        selected = sheet or available[0]
+        selected = sheet or (preferred_sheet if preferred_sheet in available else available[0])
         if selected not in available:
             raise InputFormatError(
                 f"找不到工作表“{selected}”。可用工作表：{'、'.join(available)}。"
@@ -98,7 +101,7 @@ def _read_xlsx(path: Path, sheet: str | None) -> tuple[list[list[str]], str, tup
         rows = [[_cell_text(cell) for cell in row] for row in worksheet.iter_rows(values_only=True)]
     finally:
         workbook.close()
-    if not rows or not any(any(cell for cell in row) for row in rows):
+    if not allow_empty and (not rows or not any(any(cell for cell in row) for row in rows)):
         raise InputFormatError(f"工作表“{selected}”为空。")
     return rows, selected, available
 
@@ -197,12 +200,22 @@ def _parse_weekly_matrix(
     if len(rows) <= preset.input.header_rows:
         raise InputFormatError("输入至少需要两行表头和一行数据。")
     headers = _unique_headers(rows[0])
-    mapping = resolve_fields(headers, preset, overrides)
     try:
         week_columns = discover_week_columns(rows)
         week_column = select_week_column(rows, week_columns, requested_week)
     except CsvFormatError as exc:
         raise InputFormatError(str(exc)) from exc
+    resolved_overrides = dict(overrides or {})
+    aliases = preset.input.column_aliases.get("content", ())
+    if "content" not in resolved_overrides and not any(alias in headers for alias in aliases):
+        period_indexes = {column.index for column in week_columns}
+        if any(
+            i in period_indexes and header in aliases
+            for i, header in enumerate(preset.input.expected_headers)
+        ):
+            # Old saved schemes can require content even when its period heading changes.
+            resolved_overrides["content"] = headers[week_column.index]
+    mapping = resolve_fields(headers, preset, resolved_overrides)
 
     sources: list[SourceRecord] = []
     historical_completed_count = 0
@@ -303,7 +316,7 @@ def _parse_records(
             )
         )
     if not sources:
-        raise InputFormatError("没有可生成周报的有效数据行。")
+        raise InputFormatError("没有可生成文档的有效数据行。")
     return ParsedInput(
         source_files=(SourceFile("f1", filename, file_type, sheet),),
         sources=tuple(sources),
@@ -312,6 +325,27 @@ def _parse_records(
         warnings=_warnings_for_sources(sources),
         available_sheets=available_sheets,
     )
+
+
+def _period_header(header: str) -> bool:
+    header = re.sub(r"#\d+$", "", header)
+    return bool(re.fullmatch(r"(?:(?:\d{4}年)?(?:[1-9]|1[0-2])月|第\d+周|未命名列\d+)", header))
+
+
+def _headers_match(
+    rows: Sequence[Sequence[str]], preset: RulePreset, headers: tuple[str, ...]
+) -> bool:
+    expected = preset.input.expected_headers
+    if not expected or expected == headers:
+        return True
+    if preset.input.layout != "weekly_matrix":
+        return False
+    periods = {column.index for column in discover_week_columns(rows)}
+    first = min(periods)
+    # Only recognized period headings at/after the weekly region are flexible.
+    expected_fixed = tuple(h for i, h in enumerate(expected) if i < first or not _period_header(h))
+    actual_fixed = tuple(h for i, h in enumerate(headers) if i not in periods)
+    return expected_fixed == actual_fixed
 
 
 def parse_input(
@@ -324,7 +358,6 @@ def parse_input(
     display_filename: str | None = None,
 ) -> ParsedInput:
     """Parse CSV/XLSX into normalized records according to a rule preset."""
-    sheet = sheet or preset.input.sheet_default
     if not path.is_file():
         raise FileNotFoundError(f"输入文件不存在：{path}")
     suffix = path.suffix.lower()
@@ -336,7 +369,9 @@ def parse_input(
         available_sheets: tuple[str, ...] = ()
         file_type = "csv"
     else:
-        rows, selected_sheet, available_sheets = _read_xlsx(path, sheet)
+        rows, selected_sheet, available_sheets = _read_xlsx(
+            path, sheet, preferred_sheet=preset.input.sheet_default
+        )
         file_type = "xlsx"
     filename = display_filename or path.name
     if preset.input.layout == "weekly_matrix":
@@ -361,9 +396,9 @@ def parse_input(
             field_mapping,
         )
 
-    if preset.input.expected_headers and parsed.headers != preset.input.expected_headers:
+    if not _headers_match(rows, preset, parsed.headers):
         raise InputFormatError(
-            "表头结构与已确认方案不同，请进入方案适配重新分析、确认并保存新版本。"
+            "固定字段表头结构与已确认方案不同，请进入方案适配重新分析、确认并保存新版本。"
         )
     policy = preset.input.status_policy
     if not policy:
@@ -396,7 +431,6 @@ def inspect_input_options(
     sheet: str | None = None,
 ) -> InputOptions:
     """Discover worksheet and weekly-column choices without building report content."""
-    sheet = sheet or preset.input.sheet_default
     if not path.is_file():
         raise FileNotFoundError(f"输入文件不存在：{path}")
     suffix = path.suffix.lower()
@@ -407,20 +441,29 @@ def inspect_input_options(
         selected_sheet = None
         sheets: tuple[str, ...] = ()
     else:
-        rows, selected_sheet, sheets = _read_xlsx(path, sheet)
+        rows, selected_sheet, sheets = _read_xlsx(
+            path, sheet, preferred_sheet=preset.input.sheet_default, allow_empty=True
+        )
 
     weeks: tuple[str, ...] = ()
     default_week: str | None = None
+    notice = None
     if preset.input.layout == "weekly_matrix":
         try:
             columns = discover_week_columns(rows)
             weeks = tuple(column.label for column in columns)
-            default_week = select_week_column(rows, columns).label
-        except CsvFormatError as exc:
-            raise InputFormatError(str(exc)) from exc
+            try:
+                default_week = select_week_column(rows, columns).label
+            except CsvFormatError:
+                notice = "当前工作表各周暂无有效进展，请核对所选周次或切换工作表。"
+        except CsvFormatError:
+            notice = "当前工作表未识别到周次，请选择包含周期数据的工作表。"
+    elif not rows or not any(any(cell for cell in row) for row in rows):
+        notice = "当前工作表为空，请选择其他工作表。"
     return InputOptions(
         sheets=sheets,
         selected_sheet=selected_sheet,
         weeks=weeks,
         default_week=default_week,
+        notice=notice,
     )

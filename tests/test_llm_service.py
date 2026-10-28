@@ -1,3 +1,6 @@
+"""Offline mode, model contracts, batching, fallback and provider configuration."""
+
+import io
 import json
 from collections.abc import Sequence
 from dataclasses import replace
@@ -12,6 +15,7 @@ from sheetweave_agent.llm import (
     LLMConfigurationError,
     LLMResponseError,
     LLMService,
+    OpenAICompatibleClient,
     load_llm_config,
 )
 from sheetweave_agent.service import prepare_report, process_report
@@ -418,3 +422,190 @@ def test_polish_uses_advisory_candidate_with_warning_instead_of_source_fallback(
     assert len(client.calls) == 1
     original = process_report(prepared, "original")
     assert original.blocks[0].effective_text == block.original_text
+
+
+def test_generic_settings_override_legacy_without_exposing_key():
+    config = load_llm_config(
+        {
+            "LLM_API_KEY": "generic-secret",
+            "DEEPSEEK_API_KEY": "legacy-secret",
+            "LLM_API_BASE": "https://provider.example/v1",
+            "DEEPSEEK_API_BASE": "https://legacy.example",
+            "LLM_MODEL": "model-a",
+            "LLM_ALLOWED_MODELS": "model-a,model-b",
+            "DEEPSEEK_MODEL": "legacy",
+            "DEEPSEEK_MODELS": "legacy",
+            "LLM_REASONING_EFFORT": "low",
+        }
+    )
+    assert config.api_key == "generic-secret"
+    assert config.api_base == "https://provider.example/v1"
+    assert config.model == "model-a" and config.allowed_models == ("model-a", "model-b")
+    assert config.reasoning_effort == "low"
+    assert "generic-secret" not in repr(config)
+    assert load_llm_config({"LLM_API_KEY": "", "DEEPSEEK_API_KEY": "legacy-secret"}).api_key == ""
+    assert load_llm_config({"LLM_REASONING_EFFORT": ""}).reasoning_effort is None
+
+
+@pytest.mark.parametrize("streaming", [False, True])
+@pytest.mark.parametrize("effort", [None, "medium"])
+def test_optional_reasoning_is_sent_for_both_request_paths(monkeypatch, streaming, effort):
+    def open_response(request, *, timeout):
+        payload = json.loads(request.data)
+        if effort:
+            assert payload["reasoning_effort"] == effort
+        else:
+            assert "reasoning_effort" not in payload
+        if streaming:
+            return io.BytesIO(
+                b'data: {"choices":[{"delta":{"content":"result"},"finish_reason":"stop"}]}\n\n'
+            )
+        return io.BytesIO(b'{"choices":[{"message":{"content":"result"}}]}')
+
+    monkeypatch.setattr("urllib.request.urlopen", open_response)
+    client = OpenAICompatibleClient(LLMConfig(api_key="test-only", reasoning_effort=effort))
+    result = "".join(client.stream([], "model")) if streaming else client.complete([], "model")
+    assert result == "result"
+
+
+@pytest.mark.parametrize("phase", ["await_headers", "read_body"])
+@pytest.mark.parametrize("wrapped", [False, True])
+def test_timeout_reports_phase_without_duplicate_request(monkeypatch, caplog, phase, wrapped):
+    import urllib.error
+
+    from sheetweave_agent.llm import LLMClientError
+
+    calls = []
+    error = TimeoutError("sensitive upstream information")
+    failure = urllib.error.URLError(error) if wrapped else error
+
+    class SlowResponse(io.BytesIO):
+        status = 200
+
+        def read(self, *args):
+            raise failure
+
+    def open_response(request, *, timeout):
+        calls.append(request)
+        if phase == "await_headers":
+            raise failure
+        return SlowResponse()
+
+    monkeypatch.setattr("urllib.request.urlopen", open_response)
+    caplog.set_level("INFO")
+    client = OpenAICompatibleClient(LLMConfig(api_key="hidden-test-key", max_retries=3))
+    with pytest.raises(LLMClientError, match="未自动重试"):
+        client.complete([{"role": "user", "content": "private test prompt"}], "model")
+    assert len(calls) == 1
+    events = [
+        json.loads(record.message) for record in caplog.records if record.message.startswith("{")
+    ]
+    failure_event = next(e for e in events if e["event"] == "http_end")
+    assert failure_event["stage"] == phase
+    assert failure_event["cause_type"] == "TimeoutError"
+    assert not failure_event["retry"]
+    assert all(
+        secret not in caplog.text
+        for secret in ["hidden-test-key", "private test prompt", "sensitive upstream information"]
+    )
+
+
+@pytest.mark.parametrize("status,retries", [(401, 0), (429, 1), (503, 1)])
+def test_http_status_has_bounded_retry_without_response_body_logging(monkeypatch, status, retries):
+    import urllib.error
+
+    from sheetweave_agent.llm import LLMClientError
+
+    calls = []
+
+    def open_response(request, *, timeout):
+        calls.append(request)
+        if len(calls) == 1:
+            raise urllib.error.HTTPError("https://example.invalid", status, "private", {}, None)
+        return io.BytesIO(b'{"choices":[{"message":{"content":"ok"}}]}')
+
+    monkeypatch.setattr("urllib.request.urlopen", open_response)
+    monkeypatch.setattr("sheetweave_agent.llm.client.time.sleep", lambda _seconds: None)
+    client = OpenAICompatibleClient(LLMConfig(api_key="test", max_retries=1))
+    if status == 401:
+        with pytest.raises(LLMClientError, match="HTTP 401"):
+            client.complete([], "model")
+    else:
+        assert client.complete([], "model") == "ok"
+    assert len(calls) == retries + 1
+
+
+def test_actual_message_budget_includes_context_and_contract(tmp_path, caplog):
+    from sheetweave_agent.timing import diagnostic_scope
+
+    source = tmp_path / "synthetic.csv"
+    source.write_text(
+        "项目,本周工作\n" + "".join(f"合成项目{i},完成接口测试和集成验证。\n" for i in range(20))
+    )
+    prepared, _ = prepare_report(source, preset_id="general")
+    client = FakeClient(suffix="")
+    caplog.set_level("INFO")
+    with diagnostic_scope(task_id="synthetic-task"):
+        result = _service(client, max_batch_chars=4000, max_concurrency=2).process(
+            prepared, "polish"
+        )
+    assert len(client.calls) > 1
+    assert all(sum(len(m["content"]) for m in messages) <= 4000 for messages, _ in client.calls)
+    assert len(result.blocks) == len(prepared.blocks)
+    events = [
+        json.loads(record.message) for record in caplog.records if record.message.startswith("{")
+    ]
+    batch_events = [e for e in events if e["event"] == "llm_batch_input"]
+    assert len(batch_events) == len(client.calls)
+    assert all(
+        e["task_id"] == "synthetic-task" and e["batches"] == len(client.calls) for e in batch_events
+    )
+
+
+def test_response_parse_failure_is_not_retried_or_logged(monkeypatch, caplog):
+    from sheetweave_agent.llm import LLMClientError
+
+    calls = []
+
+    def open_response(request, *, timeout):
+        calls.append(request)
+        return io.BytesIO(b"private invalid response")
+
+    monkeypatch.setattr("urllib.request.urlopen", open_response)
+    caplog.set_level("INFO")
+    with pytest.raises(LLMClientError, match="解析失败"):
+        OpenAICompatibleClient(LLMConfig(api_key="test", max_retries=2)).complete([], "model")
+    assert len(calls) == 1
+    assert "private invalid response" not in caplog.text
+
+
+def test_single_oversized_block_is_preserved_and_diagnosed(tmp_path, caplog):
+    source = tmp_path / "synthetic.csv"
+    source.write_text("项目,本周工作\n合成项目,完成测试。\n")
+    prepared, _ = prepare_report(source, preset_id="general")
+    client = FakeClient(suffix="")
+    caplog.set_level("INFO")
+    _service(client, max_batch_chars=100).process(prepared, "polish")
+    assert len(client.calls) == 1
+    assert '"oversized": true' in caplog.text
+
+
+def test_body_connection_reset_is_not_replayed(monkeypatch):
+    from sheetweave_agent.llm import LLMClientError
+
+    calls = []
+
+    class InterruptedResponse(io.BytesIO):
+        status = 200
+
+        def read(self, *args):
+            raise ConnectionResetError("private upstream message")
+
+    def open_response(request, *, timeout):
+        calls.append(request)
+        return InterruptedResponse()
+
+    monkeypatch.setattr("urllib.request.urlopen", open_response)
+    with pytest.raises(LLMClientError, match="响应中断"):
+        OpenAICompatibleClient(LLMConfig(api_key="test", max_retries=1)).complete([], "model")
+    assert len(calls) == 1

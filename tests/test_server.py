@@ -1,14 +1,20 @@
-"""Unified launcher configuration and actual subprocess lifecycle tests."""
+"""Safe service lifecycle and persistent anonymous statistics."""
 
 import os
 import signal
+import sqlite3
 import subprocess
 import sys
 import time
+from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime
+from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import pytest
 
 from sheetweave_agent.server import load_environment
+from sheetweave_agent.stats import UsageMetrics, UsageStats
 
 
 def test_env_loader_does_not_execute_values_or_expose_bad_lines(tmp_path, monkeypatch):
@@ -96,3 +102,101 @@ def test_child_exit_shuts_down_peer_and_returns_failure(tmp_path, fail_web, exit
         if process.poll() is None:
             process.terminate()
             process.communicate(timeout=5)
+
+
+def _timestamp(value: str) -> float:
+    return datetime.fromisoformat(value).replace(tzinfo=ZoneInfo("Asia/Shanghai")).timestamp()
+
+
+def test_stats_are_idempotent_and_use_monday_week_boundary(tmp_path: Path) -> None:
+    stats = UsageStats(tmp_path / "stats.sqlite3", hmac_key=b"m5-test-key-0123456789")
+    sunday = _timestamp("2026-10-04T23:59:00")
+    monday = _timestamp("2026-10-05T00:01:00")
+
+    assert stats.record_generation("old-task", generated_at=sunday)
+    assert stats.record_generation("new-task", generated_at=monday)
+    assert not stats.record_generation("new-task", generated_at=monday)
+    assert stats.record_visitor("browser-a", seen_at=monday)
+    assert not stats.record_visitor("browser-a", seen_at=monday)
+    assert stats.record_visitor("browser-b", seen_at=monday)
+
+    assert stats.metrics(now=_timestamp("2026-10-10T12:00:00")) == UsageMetrics(2, 1, 2)
+    with sqlite3.connect(stats.database_path) as connection:
+        tables = {row[0] for row in connection.execute("SELECT name FROM sqlite_master")}
+        visitor_columns = {
+            row[1] for row in connection.execute("PRAGMA table_info(anonymous_visitors)")
+        }
+    assert {"generation_totals", "generation_tasks", "anonymous_visitors"} <= tables
+    assert visitor_columns == {"visitor_hash", "first_seen"}
+
+
+def test_stats_concurrently_create_one_shared_hmac_key(tmp_path: Path) -> None:
+    path = tmp_path / "first-start.sqlite3"
+
+    def initialize(_index: int) -> UsageStats:
+        return UsageStats(path)
+
+    with ThreadPoolExecutor(max_workers=6) as executor:
+        stores = list(executor.map(initialize, range(6)))
+
+    assert len({store._digest("test", "same-value") for store in stores}) == 1
+    assert path.with_suffix(".sqlite3.key").stat().st_mode & 0o077 == 0
+
+
+def test_stats_support_concurrent_shared_sqlite_writers(tmp_path: Path) -> None:
+    path = tmp_path / "shared.sqlite3"
+    stores = [UsageStats(path, hmac_key=b"m5-shared-key-0123456789") for _unused in range(4)]
+
+    def record(index: int) -> bool:
+        return stores[index % len(stores)].record_generation(f"task-{index}")
+
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        assert all(executor.map(record, range(24)))
+    assert stores[0].metrics().total_generations == 24
+
+
+@pytest.mark.parametrize("configured,override,expected", [(5, None, 5), (5, 3, 3)])
+def test_launcher_uses_configured_workers_unless_explicitly_overridden(
+    tmp_path, monkeypatch, configured, override, expected
+):
+    from unittest.mock import MagicMock
+
+    from gunicorn.app.wsgiapp import WSGIApplication
+
+    from sheetweave_agent import server
+
+    (tmp_path / "gunicorn.conf.py").write_text(f"workers = {configured}\n")
+    monkeypatch.setattr(server, "ROOT", tmp_path)
+    monkeypatch.setattr(server.socket, "socket", MagicMock())
+    monkeypatch.setattr(
+        server.socket,
+        "getaddrinfo",
+        lambda *_args, **_kwargs: [
+            (server.socket.AF_INET, server.socket.SOCK_STREAM, 0, "", ("127.0.0.1", 18989))
+        ],
+    )
+    captured = []
+
+    def run_services(web, worker, **kwargs):
+        captured.extend(web)
+        return 0
+
+    monkeypatch.setattr(server, "run_services", run_services)
+    argv = ["server", "--no-env"]
+    if override is not None:
+        argv.extend(["--workers", str(override)])
+    monkeypatch.setattr(sys, "argv", argv)
+    assert server.main() == 0
+    assert ("--workers" in captured) == (override is not None)
+    monkeypatch.setattr(sys, "argv", ["gunicorn", *captured[3:]])
+    assert WSGIApplication().cfg.workers == expected
+
+
+@pytest.mark.parametrize("count", ["0", "-1"])
+def test_launcher_rejects_invalid_worker_override(monkeypatch, count):
+    from sheetweave_agent import server
+
+    monkeypatch.setattr(sys, "argv", ["server", "--workers", count])
+    with pytest.raises(SystemExit) as result:
+        server.main()
+    assert result.value.code == 2

@@ -249,7 +249,7 @@ def test_workspace_refresh_preserves_session_and_diff_is_read_only(tmp_path: Pat
     after = store.load_session(token).prepared
 
     assert refreshed.status_code == 200
-    assert "周报审核工作区" in refreshed.text
+    assert "文档审核工作区" in refreshed.text
     assert refreshed.text.count("查看变更对比") == 1
     assert 'class="unified-diff"' in refreshed.text
     assert 'class="diff-line removed"' in refreshed.text
