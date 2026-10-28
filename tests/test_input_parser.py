@@ -240,3 +240,174 @@ def test_historical_completed_block_is_not_sent_to_llm(tmp_path: Path) -> None:
     completed = next(block for block in result.blocks if block.original_text == "已完成")
     assert completed.generated_text is None
     assert completed.llm_editable is False
+
+
+def _flexible_matrix_preset():
+    from sheetweave_agent.rules import preset_payload, validate_rule_preset
+
+    rule = preset_payload(load_rule_preset("general"))
+    rule["input"].update(
+        layout="weekly_matrix",
+        header_rows=2,
+        sheet_default="旧工作表",
+        required_fields=["project", "content"],
+        column_aliases={
+            "project": ["项目"],
+            "detail": ["具体内容"],
+            "status": ["状态"],
+            "content": ["2026年9月"],
+        },
+        expected_headers=["项目", "具体内容", "状态", "2026年9月", "未命名列5"],
+    )
+    rule["sections"] = [
+        {
+            "id": "body",
+            "title": "工作",
+            "source_field": "content",
+            "llm_editable": True,
+            "group_by": "row",
+        }
+    ]
+    return validate_rule_preset(rule)
+
+
+def test_missing_preferred_sheet_falls_back_but_explicit_selection_is_strict(tmp_path):
+    from dataclasses import replace
+
+    from sheetweave_agent.input_parser import inspect_input_options
+
+    path = tmp_path / "weekly.xlsx"
+    book = Workbook()
+    book.active.title = "本周数据"
+    book.active.append(["项目", "本周工作"])
+    book.active.append(["合成项目", "本周进展"])
+    other = book.create_sheet("其他数据")
+    other.append(["项目", "本周工作"])
+    other.append(["合成项目", "其他进展"])
+    book.save(path)
+    base = load_rule_preset("general")
+    preset = replace(base, input=replace(base.input, sheet_default="旧名称"))
+    assert inspect_input_options(path, preset).selected_sheet == "本周数据"
+    assert parse_input(path, preset).sources[0].fields["content"] == "本周进展"
+    assert parse_input(path, preset, sheet="其他数据").sources[0].fields["content"] == "其他进展"
+    preferred = replace(base, input=replace(base.input, sheet_default="其他数据"))
+    assert parse_input(path, preferred).source_files[0].sheet == "其他数据"
+    with pytest.raises(InputFormatError, match="找不到工作表"):
+        parse_input(path, preset, sheet="不存在")
+
+
+@pytest.mark.parametrize("weeks", [1, 2, 3])
+def test_matrix_month_and_week_columns_are_runtime_scope(tmp_path, weeks):
+    import csv
+
+    from sheetweave_agent.input_parser import inspect_input_options
+
+    path = tmp_path / "matrix.csv"
+    with path.open("w", newline="") as output:
+        csv.writer(output).writerows(
+            [
+                ["项目", "具体内容", "状态", "2026年10月", *([""] * (weeks - 1))],
+                ["", "", "", *[f"第{i}周" for i in range(1, weeks + 1)]],
+                ["合成项目", "事项", "进行中", *[f"进展{i}" for i in range(1, weeks + 1)]],
+            ]
+        )
+    preset = _flexible_matrix_preset()
+    options = inspect_input_options(path, preset)
+    assert options.default_week == f"2026年10月第{weeks}周"
+    assert len(options.weeks) == weeks
+    assert parse_input(path, preset).sources[0].fields["content"] == f"进展{weeks}"
+    assert parse_input(path, preset, requested_week="第1周").sources[0].fields["content"] == "进展1"
+    with pytest.raises(InputFormatError, match="找不到周次"):
+        parse_input(path, preset, requested_week="第9周")
+
+
+def test_fixed_header_changes_still_require_confirmation(tmp_path):
+    path = tmp_path / "matrix.csv"
+    path.write_text(
+        "项目,任务说明,状态,2026年10月,\n,,,第1周,第2周\n合成项目,事项,进行中,进展1,进展2\n"
+    )
+    with pytest.raises(InputFormatError, match="表头结构"):
+        parse_input(path, _flexible_matrix_preset())
+
+
+def test_options_allow_switching_away_from_empty_first_sheet(tmp_path):
+    from sheetweave_agent.input_parser import inspect_input_options
+
+    path = tmp_path / "matrix.xlsx"
+    book = Workbook()
+    book.active.title = "说明"
+    data = book.create_sheet("10月周报")
+    for row in [
+        ["项目", "具体内容", "状态", "2026年10月", ""],
+        ["", "", "", "第1周", "第2周"],
+        ["合成项目", "事项", "进行中", "第一周进展", "第二周进展"],
+    ]:
+        data.append(row)
+    book.save(path)
+    preset = _flexible_matrix_preset()
+    options = inspect_input_options(path, preset)
+    assert options.sheets == ("说明", "10月周报")
+    assert options.notice and options.weeks == ()
+    selected = inspect_input_options(path, preset, sheet="10月周报")
+    assert selected.weeks == ("2026年10月第1周", "2026年10月第2周")
+    assert parse_input(path, preset, sheet="10月周报", requested_week="第1周").week == "第1周"
+
+
+def test_saved_profile_web_options_and_queue_honor_sheet_and_week(tmp_path):
+    import io
+
+    from sheetweave_agent.profiles import ProfileStore
+    from sheetweave_agent.rules import preset_payload
+    from sheetweave_agent.task_worker import TaskRunner
+    from sheetweave_agent.web import create_app
+
+    path = tmp_path / "matrix.xlsx"
+    book = Workbook()
+    book.active.title = "说明"
+    data = book.create_sheet("新名称")
+    for row in [
+        ["项目", "具体内容", "状态", "2026年10月", ""],
+        ["", "", "", "第1周", "第2周"],
+        ["合成项目", "事项", "进行中", "第一周进展", "第二周进展"],
+    ]:
+        data.append(row)
+    book.save(path)
+    template = Path(__file__).resolve().parents[1] / "data/研发三部周报模板-v2.docx"
+    ProfileStore.from_environment().save(
+        preset_payload(_flexible_matrix_preset()), template, profile_id="p_flexible"
+    )
+    app = create_app()
+    app.config["TESTING"] = True
+    client = app.test_client()
+
+    def form(**values):
+        return {
+            "preset": "p_flexible",
+            "csv_file": (io.BytesIO(path.read_bytes()), "matrix.xlsx"),
+            **values,
+        }
+
+    initial = client.post("/input-options", data=form())
+    assert initial.status_code == 200 and initial.json["sheets"] == ["说明", "新名称"]
+    assert initial.json["notice"]
+    options = client.post("/input-options", data=form(sheet="新名称"))
+    assert options.json["weeks"] == ["2026年10月第1周", "2026年10月第2周"]
+    response = client.post(
+        "/tasks",
+        data=form(
+            sheet="新名称",
+            week="2026年10月第1周",
+            report_date="2026-10-23",
+            content_mode="original",
+        ),
+    )
+    assert response.status_code == 202
+    queue = app.config["TASK_QUEUE"]
+    runner = TaskRunner.from_environment(queue)
+    runner.run(queue.claim("scope-test"), "scope-test")
+    status = queue.status(response.json["id"])
+    assert status["state"] == "succeeded", status.get("error")
+    session = app.config["SNAPSHOT_STORE"].load_session(status["result"]["token"])
+    assert session.prepared.source.source_files[0].sheet == "新名称"
+    assert session.prepared.source.week == "第1周"
+    assert session.prepared.blocks[0].original_text == "第一周进展"

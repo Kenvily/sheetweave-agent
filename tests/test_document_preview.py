@@ -134,7 +134,7 @@ def test_report_validation_requires_explicit_page_margins(tmp_path: Path) -> Non
         validate_report(
             invalid,
             section_number=1,
-            report_title="通用周报",
+            report_title="通用文档",
             heading_titles=("本周工作",),
         )
 
@@ -163,7 +163,7 @@ def test_pdf_preview_is_generated_for_exact_revision_without_changing_it(
     assert 'data-preview-mode="pdf"' in refreshed.text
     assert 'data-preview-panel="html" hidden' in refreshed.text
     assert 'data-preview-panel="pdf"' in refreshed.text
-    assert "通用周报" in refreshed.text  # HTML preview remains rendered after PDF generation.
+    assert "通用文档" in refreshed.text  # HTML preview remains rendered after PDF generation.
     assert "panel.hidden = panel.dataset.previewPanel !== selectedMode" in refreshed.text
     assert f"/workspace/{token}/pdf?revision=1" in refreshed.text.replace("&amp;", "&")
     pdf = client.get(f"/workspace/{token}/pdf?revision=1")

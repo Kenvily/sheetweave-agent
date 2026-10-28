@@ -31,7 +31,7 @@ def prepare_report(
 ) -> tuple[PreparedReport, RulePreset]:
     """Parse an input and create traceable original-mode content blocks."""
     if preset is None and not preset_id:
-        raise ValueError("请先新建并保存方案，再选择方案生成周报。")
+        raise ValueError("请先新建并保存方案，再选择方案生成文档。")
     preset = preset or load_rule_preset(preset_id, rules_dir)
     source = parse_input(
         input_path,

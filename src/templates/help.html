@@ -13,7 +13,7 @@
   <main id="main-content" class="help-container" tabindex="-1">
     <header class="help-header">
       <div>
-        <a class="back-link" href="{{ url_for('index') }}">← 返回周报生成器</a>
+        <a class="back-link" href="{{ url_for('index') }}">← 返回文档生成器</a>
         <h1>使用帮助</h1>
       </div>
       <div class="help-downloads">
@@ -22,8 +22,8 @@
       </div>
     </header>
 
-    <section class="help-steps" aria-label="四步生成周报">
-      <article><span>1</span><h2>上传并确认</h2><p>上传 CSV 或 XLSX，选择规则、工作表与周次，确认自动识别的字段。</p></article>
+    <section class="help-steps" aria-label="四步生成文档">
+      <article><span>1</span><h2>上传并确认</h2><p>先在方案适配中确认字段、内容组织与文档格式；上传 CSV 或 XLSX 后选择已保存方案。</p></article>
       <article><span>2</span><h2>选择处理方式</h2><p>原文保留不调用模型；规范润色支持重新分条和补充要求。</p></article>
       <article><span>3</span><h2>预览并审核</h2><p>在三栏工作区定位来源、查看原文与当前内容的 Diff；人工编辑确认修改前后对比后直接生效，也可仅重新生成一个内容块。</p></article>
       <article><span>4</span><h2>检查并下载</h2><p>查看 HTML 或可选 PDF 预览，确认当前版本后下载经过校验的 DOCX。</p></article>
@@ -48,14 +48,14 @@
 
     <section class="card help-card help-faq">
       <h2>常见问题</h2>
-      <details><summary>没有显示周次或工作表</summary><p>CSV 没有工作表；通用单周格式也没有周次选项。XLSX 请先选择文件，等待页面读取完成。</p></details>
+      <details><summary>没有显示周次或工作表</summary><p>CSV 没有工作表；普通明细表没有周次选项；仅周次矩阵需要选择周期。XLSX 请先选择文件，等待页面读取完成。</p></details>
       <details><summary>导出的是哪个版本？</summary><p>下载使用审核页的“当前内容”，包括已确认的模型候选或人工修改。修改后请重新生成 PDF 预览。</p></details>
       <details><summary>模型候选被回退</summary><p>候选涉及数字、指标、版本、日期或状态冲突时不会自动进入 DOCX。请对照来源后编辑，或勾选确认告警后谨慎采用；也可只重新生成该内容块。</p></details>
       <details><summary>PDF 预览不可用</summary><p>PDF 依赖服务器安装 LibreOffice。即使不可用，HTML 预览与 DOCX 下载仍可正常使用。</p></details>
       <details><summary>任务一直显示排队</summary><p>任务由独立后台进程处理。请确认服务器已启动后台 Worker；多人同时生成时也可能等待可用处理容量。刷新当前页面会重新连接任务。</p></details>
       <details><summary>刷新后找不到报告</summary><p>新审核会话保留 {{ session_retention_label }}，已创建会话按原到期时间生效。过期后需重新上传；关闭页面不会暂停计时。</p></details>
     </section>
-    <p class="help-privacy">页面只显示聚合统计：累计 {{ usage_metrics.total_generations }} 次、本周 {{ usage_metrics.weekly_generations }} 次、访客 {{ usage_metrics.estimated_visitors }}、访问次数 {{ usage_metrics.page_views }}。统计不保存周报正文、姓名、账号或 IP。</p>
+    <p class="help-privacy">页面只显示聚合统计：累计 {{ usage_metrics.total_generations }} 次、本周 {{ usage_metrics.weekly_generations }} 次、访客 {{ usage_metrics.estimated_visitors }}、访问次数 {{ usage_metrics.page_views }}。统计不保存文档正文、姓名、账号或 IP。</p>
   <section class="card help-card"><h2>陌生表格与新格式</h2><p>进入<a href="{{ url_for('profiles.library') }}">方案适配</a>，确认字段、状态取舍和段落格式，离线试生成后保存。方案长期保存在服务器，下次直接选用，无需重复上传模板。</p><p>首次识别需确认脱敏样例及模板片段外发，后台自动填入字段、目录和格式，最多两轮方案建议；原文试生成不调用模型。表格、文本框等复杂模板会明确提示不支持。更新方案不会改变已提交任务或审核会话的规则。</p></section>
   </main>
 </body>

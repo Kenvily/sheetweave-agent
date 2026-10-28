@@ -259,7 +259,7 @@ def create_app(
                 preset, template, metadata = store.load(preset_id)
                 g.report_profile = (preset, template.read_bytes(), metadata["version"])
             return preset
-        raise ValueError("请先新建并保存方案，再选择已保存方案生成周报。")
+        raise ValueError("请先新建并保存方案，再选择已保存方案生成文档。")
 
     def safe_metrics() -> UsageMetrics:
         service = app.config.get("USAGE_STATS")
@@ -497,8 +497,8 @@ def create_app(
 
     def save_input(upload: FileStorage, workdir: Path) -> Path:
         if not upload.filename:
-            raise ValueError("请选择周报 CSV 或 XLSX 文件。")
-        suffix = _require_extension(upload.filename, SUPPORTED_INPUT_SUFFIXES, "周报数据")
+            raise ValueError("请选择 CSV 或 XLSX 数据文件。")
+        suffix = _require_extension(upload.filename, SUPPORTED_INPUT_SUFFIXES, "表格数据")
         input_path = workdir / f"input{suffix}"
         upload.save(input_path)
         return input_path
@@ -542,7 +542,7 @@ def create_app(
         upload = _data_upload()
         try:
             if upload is None:
-                raise ValueError("请选择周报 CSV 或 XLSX 文件。")
+                raise ValueError("请选择 CSV 或 XLSX 数据文件。")
             preset = selected_preset(request.form.get("preset", ""))
             with tempfile.TemporaryDirectory(prefix="weekly-report-options-") as directory:
                 input_path = save_input(upload, Path(directory))
@@ -556,6 +556,7 @@ def create_app(
                 selected_sheet=options.selected_sheet,
                 weeks=options.weeks,
                 default_week=options.default_week,
+                notice=options.notice,
                 section_default=preset.document.heading_start_default,
             )
         except (FileNotFoundError, OSError, ValueError, zipfile.BadZipFile) as exc:
@@ -590,7 +591,7 @@ def create_app(
         """Compatibility synchronous preview; the homepage uses queued tasks."""
         upload = _data_upload()
         if upload is None:
-            raise ValueError("请选择周报 CSV 或 XLSX 文件。")
+            raise ValueError("请选择 CSV 或 XLSX 数据文件。")
         options = generation_options(upload)
         with tempfile.TemporaryDirectory(prefix="weekly-report-preview-") as directory:
             workdir = Path(directory)
@@ -636,7 +637,7 @@ def create_app(
         try:
             upload = _data_upload()
             if upload is None:
-                raise ValueError("请选择周报 CSV 或 XLSX 文件。")
+                raise ValueError("请选择 CSV 或 XLSX 数据文件。")
             options = generation_options(upload)
             if options["content_mode"] != "original":
                 service = app.config.get("LLM_SERVICE") or LLMService(load_llm_config())
@@ -750,7 +751,7 @@ def create_app(
         try:
             upload = _data_upload()
             if upload is None:
-                raise ValueError("请选择周报 CSV 或 XLSX 文件。")
+                raise ValueError("请选择 CSV 或 XLSX 数据文件。")
             saved_input = save_input(upload, Path(upload_work.name))
             saved_template = selected_template(Path(upload_work.name))
         except (OSError, ValueError, zipfile.BadZipFile) as exc:
@@ -979,7 +980,7 @@ def create_app(
         upload = _data_upload()
         try:
             if upload is None:
-                raise ValueError("请选择周报 CSV 或 XLSX 文件。")
+                raise ValueError("请选择 CSV 或 XLSX 数据文件。")
             preset = selected_preset(request.form.get("preset", ""))
             report_date = _parse_date(request.form.get("report_date", ""))
             section_number = _parse_section_number(request.form.get("section_number", ""), preset)
@@ -1045,7 +1046,7 @@ def create_app(
 
 def build_parser() -> argparse.ArgumentParser:
     """Build the web server command-line parser."""
-    parser = argparse.ArgumentParser(description="启动周报生成页面。")
+    parser = argparse.ArgumentParser(description="启动文档生成页面。")
     parser.add_argument("--host", default="127.0.0.1", help="监听地址")
     parser.add_argument("--port", type=int, default=8000, help="监听端口")
     parser.add_argument("--template", type=Path, help="默认 DOCX 模板路径")

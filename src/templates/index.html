@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>新建周报 · SheetWeaveAgent</title>
+  <title>新建文档 · SheetWeaveAgent</title>
   <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
   <link rel="icon" href="{{ url_for('static', filename='sheetweave-mark.svg') }}" type="image/svg+xml">
 </head>
@@ -12,20 +12,20 @@
   {{ navigation('create') }}
   <main id="main-content" class="container{% if prepared %} container-wide{% endif %}" tabindex="-1">
     <header class="page-intro">
-      <h1>新建周报</h1>
+      <h1>新建文档</h1>
       <span class="intro-tag">CSV / XLSX → DOCX</span>
     </header>
     <div class="create-layout">
-    <section class="card configuration-card" aria-label="周报生成配置">
+    <section class="card configuration-card" aria-label="文档生成配置">
       <div class="section-head"><h2>生成设置</h2></div>
       {% if error %}<div class="alert" role="alert" tabindex="-1">{{ error }}</div>{% endif %}
-      {% if not presets %}<p class="alert">尚未创建方案。请先<a href="{{ url_for('profiles.library') }}">新建并保存方案</a>，再上传周报生成。</p>{% endif %}
+      {% if not presets %}<p class="alert">尚未创建方案。请先<a href="{{ url_for('profiles.library') }}">新建并保存方案</a>，再上传表格生成文档。</p>{% endif %}
       <form data-task-url="{{ url_for('submit_generation_task') }}" id="report-form" action="{{ url_for('generate') }}" method="post" enctype="multipart/form-data">
         <input type="hidden" name="generation_task_id" value="{{ generation_task_id }}">
         <fieldset class="form-section"><legend><span class="step-number">1</span>选择数据来源</legend>
         <div class="grid input-grid">
           <label class="field upload-field">
-            <span>周报文件（CSV / XLSX）</span>
+            <span>数据文件（CSV / XLSX）</span>
             <input type="file" name="csv_file" accept=".csv,.xlsx,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" required>
           </label>
           <label class="field">
@@ -56,7 +56,7 @@
           <label class="field">
             <span>XLSX 工作表（可选）</span>
             <select name="sheet">
-              <option value="">自动选择第一个工作表</option>
+              <option value="">自动选择可用工作表</option>
               {% if form.get('sheet') %}<option value="{{ form.get('sheet') }}" selected>{{ form.get('sheet') }}</option>{% endif %}
             </select>
           </label>
@@ -195,7 +195,7 @@
   <div id="processing-overlay" class="processing-overlay" role="dialog" aria-modal="true" aria-labelledby="processing-title" aria-hidden="true">
     <div class="processing-panel">
       <span class="spinner" aria-hidden="true"></span>
-      <strong id="processing-title">正在处理周报</strong>
+      <strong id="processing-title">正在处理文档</strong>
       <p id="processing-message" role="status" aria-live="polite">请保持页面打开，完成后会自动显示结果。</p>
 
       <button type="button" class="secondary" id="cancel-generation" hidden>取消生成</button>
@@ -270,7 +270,7 @@
         optionsRequest?.abort();
         optionsRequest = new AbortController();
         const requestedSheet = keepSheet ? sheet.value : "";
-        const previousWeek = week.value;
+        const previousWeek = keepSheet ? week.value : "";
         const payload = new FormData();
         payload.append("csv_file", file, file.name);
         payload.append("preset", preset.value);
@@ -290,7 +290,7 @@
           replaceOptions(
             sheet,
             data.sheets,
-            data.sheets.length ? "自动选择第一个工作表" : "CSV 无工作表",
+            data.sheets.length ? "自动选择可用工作表" : "CSV 无工作表",
             requestedSheet || data.selected_sheet || "",
           );
           const selectedWeek = data.weeks.includes(previousWeek)
@@ -303,9 +303,9 @@
             selectedWeek,
           );
           updateSectionDefault(data.section_default);
-          optionsStatus.textContent = data.sheets.length || data.weeks.length
+          optionsStatus.textContent = data.notice || (data.sheets.length || data.weeks.length
             ? "文件选项已加载，可直接选择工作表和周次。"
-            : "文件已读取，当前规则无需选择工作表或周次。";
+            : "文件已读取，当前规则无需选择工作表或周次。");
         } catch (error) {
           if (error.name === "AbortError") return;
           optionsStatus.classList.add("error");
@@ -342,7 +342,7 @@
         const plainName = disposition.match(/filename="?([^";]+)"?/i);
         const filename = encodedName
           ? decodeURIComponent(encodedName[1])
-          : (plainName ? plainName[1] : "周报.docx");
+          : (plainName ? plainName[1] : "文档.docx");
         const url = URL.createObjectURL(await response.blob());
         const link = document.createElement("a");
         link.href = url;

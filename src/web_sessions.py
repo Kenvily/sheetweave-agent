@@ -245,7 +245,7 @@ class SnapshotStore:
 
     def _directory(self, token: str) -> Path:
         if not TOKEN_PATTERN.fullmatch(token):
-            raise ValueError("周报预览链接无效或已经过期，请重新预览。")
+            raise ValueError("文档预览链接无效或已经过期，请重新预览。")
         return self.root / token
 
     @contextmanager
@@ -304,9 +304,9 @@ class SnapshotStore:
                 pdf_path=self._valid_pdf_path(directory, revision),
             )
         except (KeyError, TypeError, ValueError) as exc:
-            raise ValueError("周报编辑会话无效或已经过期，请重新预览。") from exc
+            raise ValueError("文档编辑会话无效或已经过期，请重新预览。") from exc
         if not report_path.is_file() or not template_path.is_file():
-            raise ValueError("周报编辑会话无效或已经过期，请重新预览。")
+            raise ValueError("文档编辑会话无效或已经过期，请重新预览。")
         return session
 
     def _read_state(self, directory: Path) -> dict[str, Any]:
@@ -314,10 +314,10 @@ class SnapshotStore:
             state = json.loads((directory / "state.json").read_text(encoding="utf-8"))
             expires_at = float(state["expires_at"])
         except (OSError, ValueError, TypeError, KeyError, json.JSONDecodeError) as exc:
-            raise ValueError("周报编辑会话无效或已经过期，请重新预览。") from exc
+            raise ValueError("文档编辑会话无效或已经过期，请重新预览。") from exc
         if not math.isfinite(expires_at) or expires_at < time.time():
             shutil.rmtree(directory, ignore_errors=True)
-            raise ValueError("周报编辑会话已经过期，请重新预览。")
+            raise ValueError("文档编辑会话已经过期，请重新预览。")
         return state
 
     def update_session(
@@ -407,10 +407,10 @@ class SnapshotStore:
             expires_at = float(metadata["expires_at"])
             download_name = self._safe_download_name(metadata["download_name"])
         except (OSError, ValueError, TypeError, KeyError, json.JSONDecodeError) as exc:
-            raise ValueError("周报预览链接无效或已经过期，请重新预览。") from exc
+            raise ValueError("文档预览链接无效或已经过期，请重新预览。") from exc
         if not math.isfinite(expires_at) or expires_at < time.time() or not report_path.is_file():
             shutil.rmtree(directory, ignore_errors=True)
-            raise ValueError("周报预览已经过期，请重新预览。")
+            raise ValueError("文档预览已经过期，请重新预览。")
         return ReportSnapshot(report_path, download_name)
 
 

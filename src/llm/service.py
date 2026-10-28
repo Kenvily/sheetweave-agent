@@ -53,7 +53,7 @@ class ModeProfile:
 
 MODE_PROFILES: dict[ContentMode, ModeProfile] = {
     ContentMode.POLISH: ModeProfile(
-        objective="在保留来源事实与正确归属的前提下，纠正分段和层级，将原文整理成正式、清晰的周报表述。",
+        objective="在保留来源事实与正确归属的前提下，纠正分段和层级，将原文整理成正式、清晰的文档表述。",
         length_rule="不设置长度比例；允许压缩重复、补全衔接和重新组织，以信息准确、清晰完整为准。",
         organization="依据事项语义重新分条、合并断行并纠正父子层级，原始换行、序号和标点不可靠，不要求保持段落数量。",
         required_actions=(
@@ -163,7 +163,7 @@ def _messages(
     contract = _mode_contract(mode, custom_instruction)
     source = [_request_block(prepared, block, mode, custom_instruction) for block in blocks]
     system = (
-        "你是公司周报文本整理器，只能改写 editable_text。"
+        "你是企业文档内容整理助手，只能改写 editable_text。"
         "primary_field表示主要正文字段，source_units保留原始行边界及事项上下文。"
         "围绕主要正文整合补充字段，不遗漏事实，不因合并多行就将不同事项变成上下级。"
         "mode_contract 是本次模式必须执行的写作契约，不是参考建议；"
@@ -212,7 +212,7 @@ def _correction_messages(
             }
         )
     system = (
-        "你正在修正周报候选文本中的严重事实冲突。只修正 unsafe_candidate，"
+        "你正在修正文档候选文本中的严重事实冲突。只修正 unsafe_candidate，"
         "使其与 editable_text 和 protected_facts 一致；不得修改 immutable_context，"
         "不得添加新事实。每个 block_id 只返回一次，保留正确的语义分条及父子归属。"
         '只输出JSON {"blocks":[{"block_id":"...","paragraphs":[{"level":1,"text":"..."}]}]}。'
