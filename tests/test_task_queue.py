@@ -309,3 +309,45 @@ def test_queued_regeneration_publishes_new_revision(tmp_path):
     assert updated.revision == 2
     assert "完成模型验证" in updated.prepared.blocks[0].generated_text
     assert app.config["USAGE_STATS"].metrics().total_generations == 1
+
+
+@pytest.mark.parametrize("mode", ["original", "polish"])
+def test_native_client_generation_chain_logs_safe_stages(tmp_path, monkeypatch, caplog, mode):
+    requests = []
+
+    def open_response(request, *, timeout):
+        requests.append(request)
+        payload = json.loads(request.data)
+        blocks = json.loads(payload["messages"][-1]["content"])["blocks"]
+        content = json.dumps(
+            {
+                "blocks": [
+                    {"block_id": block["block_id"], "text": block["editable_text"]}
+                    for block in blocks
+                ]
+            }
+        )
+        return io.BytesIO(json.dumps({"choices": [{"message": {"content": content}}]}).encode())
+
+    monkeypatch.setattr("urllib.request.urlopen", open_response)
+    app, queue, snapshots, runner = _app(tmp_path)
+    runner.llm_service = LLMService(LLMConfig(api_key="never-log-secret"))
+    app.config["LLM_SERVICE"] = runner.llm_service
+    caplog.set_level("INFO")
+    response = app.test_client().post("/tasks", data=_form(mode))
+    job = queue.claim("diagnostic-worker")
+    runner.run(job, "diagnostic-worker")
+    status = queue.status(response.json["id"])
+    assert status["state"] == "succeeded"
+    assert snapshots.get(status["result"]["token"]).path.read_bytes().startswith(b"PK")
+    assert len(requests) == (1 if mode == "polish" else 0)
+    events = [
+        json.loads(record.message) for record in caplog.records if record.message.startswith("{")
+    ]
+    stages = {event.get("stage") for event in events}
+    assert {"prepare_ir", "llm_process", "docx_render_validate"} <= stages
+    if mode == "polish":
+        assert {"http_attempt", "response_parse", "fact_validation"} <= stages
+    assert any(e["event"] == "task_result" and e["state"] == "succeeded" for e in events)
+    assert "never-log-secret" not in caplog.text
+    assert "合成项目" not in caplog.text

@@ -134,7 +134,7 @@ def test_report_validation_requires_explicit_page_margins(tmp_path: Path) -> Non
         validate_report(
             invalid,
             section_number=1,
-            report_title="通用周报",
+            report_title="通用文档",
             heading_titles=("本周工作",),
         )
 
@@ -163,7 +163,7 @@ def test_pdf_preview_is_generated_for_exact_revision_without_changing_it(
     assert 'data-preview-mode="pdf"' in refreshed.text
     assert 'data-preview-panel="html" hidden' in refreshed.text
     assert 'data-preview-panel="pdf"' in refreshed.text
-    assert "通用周报" in refreshed.text  # HTML preview remains rendered after PDF generation.
+    assert "通用文档" in refreshed.text  # HTML preview remains rendered after PDF generation.
     assert "panel.hidden = panel.dataset.previewPanel !== selectedMode" in refreshed.text
     assert f"/workspace/{token}/pdf?revision=1" in refreshed.text.replace("&amp;", "&")
     pdf = client.get(f"/workspace/{token}/pdf?revision=1")
@@ -214,3 +214,82 @@ def test_pdf_failure_or_unavailable_converter_does_not_block_docx(tmp_path: Path
     assert failed.status_code == 400
     assert "DOCX 下载不受影响" in failed.text
     assert failing_client.get(f"/download/{token}").status_code == 200
+
+
+@pytest.mark.parametrize(
+    ("value", "seconds", "label"),
+    [
+        ("2h", 7200, "2 小时"),
+        ("3d", 259200, "3 天"),
+        ("1w", 604800, "1 周"),
+        ("24小时", 86400, "1 天"),
+        ("2天", 172800, "2 天"),
+        ("2周", 1209600, "2 周"),
+        (" 3 H ", 10800, "3 小时"),
+        ("", 7200, "2 小时"),
+    ],
+)
+def test_session_retention_readable_units(tmp_path, monkeypatch, value, seconds, label):
+    monkeypatch.setenv("REPORT_SESSION_TTL", value)
+    monkeypatch.setenv("REPORT_SESSION_TTL_SECONDS", "60")
+    store = SnapshotStore.from_environment(tmp_path / "sessions")
+    assert store.ttl_seconds == seconds
+    assert store.retention_label == label
+
+
+@pytest.mark.parametrize("value", ["0h", "-1d", "1.5w", "24", "invalid"])
+def test_session_retention_invalid_configuration(tmp_path, monkeypatch, value):
+    monkeypatch.setenv("REPORT_SESSION_TTL", value)
+    with pytest.raises(ValueError, match="REPORT_SESSION_TTL"):
+        SnapshotStore.from_environment(tmp_path / "sessions")
+
+
+def test_session_retention_legacy_and_default(tmp_path, monkeypatch):
+    assert SnapshotStore.from_environment(tmp_path / "sessions").ttl_seconds == 7200
+    monkeypatch.setenv("REPORT_SESSION_TTL_SECONDS", "90")
+    assert SnapshotStore.from_environment(tmp_path / "sessions").ttl_seconds == 90
+    monkeypatch.setenv("REPORT_SESSION_TTL_SECONDS", "0")
+    with pytest.raises(ValueError, match="REPORT_SESSION_TTL_SECONDS"):
+        SnapshotStore.from_environment(tmp_path / "sessions")
+
+
+def test_session_retention_shared_by_web_worker_and_displayed(monkeypatch):
+    from sheetweave_agent.task_worker import TaskRunner
+
+    monkeypatch.setenv("REPORT_SESSION_TTL", "3d")
+    app = create_app(TEMPLATE)
+    app.config["TESTING"] = True
+    store = app.config["SNAPSHOT_STORE"]
+    runner = TaskRunner.from_environment(app.config["TASK_QUEUE"])
+    assert runner.snapshots.root == store.root
+    assert runner.snapshots.ttl_seconds == store.ttl_seconds == 259200
+    client = app.test_client()
+    assert "3 天" in client.get("/").text
+    assert "3 天" in client.get("/help").text
+    html, token = _preview(client)
+    assert "有效至" in html
+    session = store.load_session(token)
+    assert session.expires_at > 0
+    assert store.get(token).path.is_file()
+
+
+@pytest.mark.parametrize("editable", [False, True])
+def test_cleanup_respects_saved_expiry_after_configuration_change(tmp_path, monkeypatch, editable):
+    import json
+
+    store = SnapshotStore(tmp_path / "sessions", ttl_seconds=86400)
+    if editable:
+        app = create_app(TEMPLATE, None, store, UnavailablePdfService())
+        app.config["TESTING"] = True
+        _, token = _preview(app.test_client())
+        metadata = store.root / token / "state.json"
+    else:
+        token = store.create(b"synthetic", "report.docx")
+        metadata = store.root / token / "metadata.json"
+    expires_at = json.loads(metadata.read_text())["expires_at"]
+    shorter = SnapshotStore(store.root, ttl_seconds=60)
+    shorter.cleanup_expired(now=expires_at - 1)
+    assert metadata.is_file()
+    longer = SnapshotStore(store.root, ttl_seconds=604800)
+    longer.cleanup_expired(now=expires_at + 1)
+    assert not metadata.parent.exists()

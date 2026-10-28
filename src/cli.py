@@ -20,11 +20,11 @@ def _iso_date(value: str) -> date:
 
 def build_parser() -> argparse.ArgumentParser:
     """Build the command-line argument parser."""
-    parser = argparse.ArgumentParser(description="使用已保存方案生成周报 DOCX。")
+    parser = argparse.ArgumentParser(description="使用已保存方案生成文档 DOCX。")
     parser.add_argument(
         "--input", type=Path, default=Path("data/周报-v1.csv"), help="输入 CSV/XLSX"
     )
-    parser.add_argument("--output", type=Path, default=Path("outputs/周报.docx"), help="输出 DOCX")
+    parser.add_argument("--output", type=Path, default=Path("outputs/文档.docx"), help="输出 DOCX")
     parser.add_argument("--week", help="周次，例如“第1周”或“2026年9月第1周”")
     parser.add_argument("--profile", required=True, help="已保存方案 ID；先在方案适配中创建并保存")
     parser.add_argument("--sheet", help="XLSX 工作表名称，默认使用第一个工作表")

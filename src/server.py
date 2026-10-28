@@ -134,13 +134,19 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=18989)
-    parser.add_argument("--workers", type=int, default=2, help="Gunicorn Web 进程数")
+    parser.add_argument(
+        "--workers", type=int, help="覆盖 gunicorn.conf.py 中的 Web 进程数（默认使用配置文件）"
+    )
     parser.add_argument("--threads", type=int, default=2, help="每个 Web 进程的请求线程数")
     group = parser.add_mutually_exclusive_group()
     group.add_argument("--env-file", type=Path, help="默认读取项目 .env（存在时）")
     group.add_argument("--no-env", action="store_true", help="只使用已有环境变量")
     args = parser.parse_args()
-    if not 1 <= args.port <= 65535 or args.workers < 1 or args.threads < 1:
+    if (
+        not 1 <= args.port <= 65535
+        or (args.workers is not None and args.workers < 1)
+        or args.threads < 1
+    ):
         parser.error("端口、Web 进程数或线程数无效。")
     path = args.env_file or (ROOT / ".env" if (ROOT / ".env").is_file() else None)
     try:
@@ -164,20 +170,24 @@ def main() -> int:
         "gunicorn",
         "--config",
         str(ROOT / "gunicorn.conf.py"),
-        "--workers",
-        str(args.workers),
-        "--worker-class",
-        "gthread",
-        "--threads",
-        str(args.threads),
-        "--bind",
-        bind,
-        "--access-logfile",
-        "-",
-        "--error-logfile",
-        "-",
-        "sheetweave_agent.web:create_app()",
     ]
+    if args.workers is not None:
+        web.extend(["--workers", str(args.workers)])
+    web.extend(
+        [
+            "--worker-class",
+            "gthread",
+            "--threads",
+            str(args.threads),
+            "--bind",
+            bind,
+            "--access-logfile",
+            "-",
+            "--error-logfile",
+            "-",
+            "sheetweave_agent.web:create_app()",
+        ]
+    )
     worker = [sys.executable, "-m", "sheetweave_agent.task_worker"]
     return run_services(
         web, worker, cwd=ROOT, environ=environ, ready=lambda: web_ready(host, args.port)

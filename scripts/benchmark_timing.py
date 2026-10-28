@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import logging
 import os
 import shlex
 import tempfile
@@ -89,7 +90,10 @@ def main() -> int:
     parser.add_argument("--max-batch-chars", type=int)
     parser.add_argument("--plain-comparison", action="store_true")
     parser.add_argument("--output", type=Path, default=ROOT / "outputs/timing-benchmark.json")
+    parser.add_argument("--max-concurrency", type=int, choices=range(1, 5))
+    parser.add_argument("--mode", choices=("original", "polish"), default="polish")
     args = parser.parse_args()
+    logging.basicConfig(level=logging.INFO, format="%(message)s")
     if not 1 <= args.rows <= 50 or not 1 <= args.runs <= 3 or args.mock_delay < 0:
         parser.error("rows 必须为 1～50，runs 为 1～3，mock-delay 不得为负。")
     if args.real and not args.allow_external:
@@ -105,6 +109,10 @@ def main() -> int:
         if args.max_batch_chars <= 0:
             parser.error("max-batch-chars 必须大于 0。")
         config = replace(config, max_batch_chars=args.max_batch_chars)
+    if args.max_concurrency is not None:
+        from dataclasses import replace
+
+        config = replace(config, max_concurrency=args.max_concurrency)
     results = []
     with tempfile.TemporaryDirectory(prefix="sheetweave-timing-") as directory:
         work = Path(directory)
@@ -132,12 +140,12 @@ def main() -> int:
                     client = None if args.real else MockClient(recorder, args.mock_delay)
                     service = LLMService(config, client, timings=recorder)
                     with recorder.measure("llm_process"):
-                        prepared = process_report(prepared, "polish", llm_service=service)
+                        prepared = process_report(prepared, args.mode, llm_service=service)
                     with recorder.measure("docx_render_validate"):
                         render_prepared_report(
                             prepared,
                             preset,
-                            ROOT / "data/研发三部周报模板.docx",
+                            ROOT / "data/研发三部周报模板-v2.docx",
                             work / f"report-{index}.docx",
                             date(2026, 10, 12),
                         )
@@ -174,6 +182,7 @@ def main() -> int:
         "backend": "real" if args.real else "mock",
         "model": config.model if args.real else "mock",
         "synthetic_rows": args.rows,
+        "mode": args.mode,
         "batch_char_limit": config.max_batch_chars,
         "max_concurrency": config.max_concurrency,
         "auto_correct": config.auto_correct,

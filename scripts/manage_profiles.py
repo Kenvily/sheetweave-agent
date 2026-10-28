@@ -6,6 +6,7 @@ import argparse
 import json
 import os
 import sqlite3
+import sys
 import time
 from datetime import datetime
 from pathlib import Path
@@ -120,11 +121,18 @@ def rename_profile(library: ProfileStore, profile_id: str, name: str | None = No
         print(f"已重命名：{preset.name} → {name.strip()}（v{version}）")
 
 
-def interactive(library: ProfileStore) -> int:
-    """Run until exit; failed or cancelled operations return to the same menu."""
+def refresh_screen(library: ProfileStore) -> None:
+    """Redraw a terminal screen without control codes in redirected output."""
+    if sys.stdout.isatty() and os.environ.get("TERM") != "dumb":
+        print("\033[2J\033[H", end="", flush=True)
     print("\nSheetWeaveAgent · 报告方案管理")
     print(f"方案目录：{library.root}")
+
+
+def interactive(library: ProfileStore) -> int:
+    """Run until exit; failed or cancelled operations return to the same menu."""
     while True:
+        refresh_screen(library)
         print(f"\n{LINE}\n  1  查询全部方案\n  2  按名称 / ID 搜索\n  3  筛选长期未使用方案")
         print("  4  查看方案详情\n  5  删除方案\n  6  重命名方案\n  0  退出\n" + LINE)
         try:
@@ -132,6 +140,7 @@ def interactive(library: ProfileStore) -> int:
             if command in {"0", "q", "exit", "quit"}:
                 print("已退出方案管理。")
                 return 0
+            refresh_screen(library)
             if command == "1":
                 list_profiles(library)
             elif command == "2":
@@ -153,6 +162,11 @@ def interactive(library: ProfileStore) -> int:
                 print("无效选项，请输入 0–6。")
         except ERRORS as exc:
             print(f"\n操作失败：{exc}\n可重新选择，未自动重试删除。")
+        except (EOFError, KeyboardInterrupt):
+            print("\n已退出方案管理。")
+            return 0
+        try:
+            input("\n按回车返回菜单…")
         except (EOFError, KeyboardInterrupt):
             print("\n已退出方案管理。")
             return 0

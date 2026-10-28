@@ -9,7 +9,13 @@ from dataclasses import dataclass, replace
 from enum import Enum
 
 from sheetweave_agent.models import ContentBlock, PreparedReport
-from sheetweave_agent.timing import TimingRecorder, measure
+from sheetweave_agent.timing import (
+    TimingRecorder,
+    diagnostic_context,
+    diagnostic_event,
+    diagnostic_scope,
+    measure,
+)
 
 from .client import LLMClient, OpenAICompatibleClient
 from .config import LLMConfig
@@ -47,7 +53,7 @@ class ModeProfile:
 
 MODE_PROFILES: dict[ContentMode, ModeProfile] = {
     ContentMode.POLISH: ModeProfile(
-        objective="在保留来源事实与正确归属的前提下，纠正分段和层级，将原文整理成正式、清晰的周报表述。",
+        objective="在保留来源事实与正确归属的前提下，纠正分段和层级，将原文整理成正式、清晰的文档表述。",
         length_rule="不设置长度比例；允许压缩重复、补全衔接和重新组织，以信息准确、清晰完整为准。",
         organization="依据事项语义重新分条、合并断行并纠正父子层级，原始换行、序号和标点不可靠，不要求保持段落数量。",
         required_actions=(
@@ -157,7 +163,7 @@ def _messages(
     contract = _mode_contract(mode, custom_instruction)
     source = [_request_block(prepared, block, mode, custom_instruction) for block in blocks]
     system = (
-        "你是公司周报文本整理器，只能改写 editable_text。"
+        "你是企业文档内容整理助手，只能改写 editable_text。"
         "primary_field表示主要正文字段，source_units保留原始行边界及事项上下文。"
         "围绕主要正文整合补充字段，不遗漏事实，不因合并多行就将不同事项变成上下级。"
         "mode_contract 是本次模式必须执行的写作契约，不是参考建议；"
@@ -206,7 +212,7 @@ def _correction_messages(
             }
         )
     system = (
-        "你正在修正周报候选文本中的严重事实冲突。只修正 unsafe_candidate，"
+        "你正在修正文档候选文本中的严重事实冲突。只修正 unsafe_candidate，"
         "使其与 editable_text 和 protected_facts 一致；不得修改 immutable_context，"
         "不得添加新事实。每个 block_id 只返回一次，保留正确的语义分条及父子归属。"
         '只输出JSON {"blocks":[{"block_id":"...","paragraphs":[{"level":1,"text":"..."}]}]}。'
@@ -295,17 +301,25 @@ def _decode_response(content: str, expected_ids: tuple[str, ...]) -> dict[str, s
 
 
 def _batches(
-    blocks: Sequence[ContentBlock], max_chars: int
+    blocks: Sequence[ContentBlock],
+    max_chars: int,
+    *,
+    block_sizes: Sequence[int] | None = None,
+    overhead: int = 0,
 ) -> tuple[tuple[ContentBlock, ...], ...]:
     batches: list[list[ContentBlock]] = []
     current: list[ContentBlock] = []
-    current_size = 0
-    for block in blocks:
-        size = len(block.original_text) + len(block.group_key) + len(block.section_title) + 300
+    current_size = overhead
+    for index, block in enumerate(blocks):
+        size = (
+            block_sizes[index]
+            if block_sizes is not None
+            else len(block.original_text) + len(block.group_key) + len(block.section_title) + 300
+        )
         if current and current_size + size > max_chars:
             batches.append(current)
             current = []
-            current_size = 0
+            current_size = overhead
         current.append(block)
         current_size += size
     if current:
@@ -379,10 +393,52 @@ class LLMService:
         client = self._client or OpenAICompatibleClient(config, timings=self._timings)
         candidates: dict[str, str] = {}
 
+        # Account for the actual JSON and fixed contract, not only editable_text.
+        empty_messages = _messages(prepared, (), selected_mode, custom_instruction)
+        overhead = sum(len(message["content"]) for message in empty_messages)
+        sizes = [
+            len(
+                json.dumps(
+                    _request_block(prepared, block, selected_mode, custom_instruction),
+                    ensure_ascii=False,
+                )
+            )
+            + 2
+            for block in editable
+        ]
+        batches = _batches(editable, config.max_batch_chars, block_sizes=sizes, overhead=overhead)
+        parent_context = diagnostic_context()
+        diagnostic_event(
+            "llm_plan",
+            model=config.model,
+            batches=len(batches),
+            blocks=len(editable),
+            max_concurrency=config.max_concurrency,
+            batch_char_limit=config.max_batch_chars,
+        )
+
         def generate_batch(item: tuple[int, tuple[ContentBlock, ...]]) -> dict[str, str]:
             index, batch = item
-            with measure(self._timings, "llm_batch", blocks=len(batch)):
+            with (
+                diagnostic_scope(
+                    **{
+                        **parent_context,
+                        "model": config.model,
+                        "batch": index,
+                        "batches": len(batches),
+                        "blocks": len(batch),
+                    }
+                ),
+                measure(self._timings, "llm_batch", blocks=len(batch)),
+            ):
                 messages = _messages(prepared, batch, selected_mode, custom_instruction)
+                message_chars = sum(len(message["content"]) for message in messages)
+                diagnostic_event(
+                    "llm_batch_input",
+                    blocks=len(batch),
+                    input_chars=message_chars,
+                    oversized=message_chars > config.max_batch_chars,
+                )
                 stream = getattr(client, "stream", None)
                 if on_delta is not None and callable(stream):
                     chunks = []
@@ -394,9 +450,9 @@ class LLMService:
                     response = client.complete(messages, config.model)
                     if on_delta is not None:
                         on_delta(index, response)
-                return _decode_response(response, tuple(block.block_id for block in batch))
+                with measure(self._timings, "response_parse", blocks=len(batch)):
+                    return _decode_response(response, tuple(block.block_id for block in batch))
 
-        batches = _batches(editable, config.max_batch_chars)
         if len(batches) > 1 and config.max_concurrency > 1:
             with ThreadPoolExecutor(max_workers=config.max_concurrency) as executor:
                 for generated in executor.map(generate_batch, enumerate(batches, start=1)):
