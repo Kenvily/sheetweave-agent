@@ -38,7 +38,7 @@ from sheetweave_agent.validator import ReportValidationError, validate_report
 from sheetweave_agent.web import create_app
 from sheetweave_agent.web_sessions import session_preset
 
-TEMPLATE = Path("data/研发三部周报模板-v2.docx")
+TEMPLATE = Path("tests/fixtures/templates/reference.docx")
 
 
 CSV = (

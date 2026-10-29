@@ -138,7 +138,7 @@ def test_xlsx_sheet_selection_and_physical_rows(tmp_path: Path) -> None:
 ROOT = Path(__file__).resolve().parents[1]
 
 
-TEMPLATE = ROOT / "data/研发三部周报模板-v2.docx"
+TEMPLATE = ROOT / "tests/fixtures/templates/reference.docx"
 
 
 def _matrix_csv(*rows: str) -> str:
@@ -372,7 +372,7 @@ def test_saved_profile_web_options_and_queue_honor_sheet_and_week(tmp_path):
     ]:
         data.append(row)
     book.save(path)
-    template = Path(__file__).resolve().parents[1] / "data/研发三部周报模板-v2.docx"
+    template = Path(__file__).resolve().parents[1] / "tests/fixtures/templates/reference.docx"
     ProfileStore.from_environment().save(
         preset_payload(_flexible_matrix_preset()), template, profile_id="p_flexible"
     )

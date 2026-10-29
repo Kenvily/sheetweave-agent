@@ -67,7 +67,7 @@ from .web_profiles import profiles_ui
 from .web_sessions import ReportSession, SessionConflictError, SnapshotStore, session_preset
 from .web_stream import GenerationCancelled, stream_events
 
-DEFAULT_TEMPLATE = Path("data/研发三部周报模板-v2.docx")
+DEFAULT_TEMPLATE = Path("data/周报/研发三部/模板/研发三部周报模板_测试.docx")
 DOCX_MIME_TYPE = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
 MAX_UPLOAD_SIZE = 16 * 1024 * 1024
 SUPPORTED_INPUT_SUFFIXES = {".csv", ".xlsx"}

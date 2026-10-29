@@ -14,7 +14,7 @@ from sheetweave_agent.web_sessions import SnapshotStore
 pytestmark = pytest.mark.usefixtures("saved_generation_profiles")
 
 ROOT = Path(__file__).resolve().parents[1]
-TEMPLATE = ROOT / "data/研发三部周报模板-v2.docx"
+TEMPLATE = ROOT / "tests/fixtures/templates/reference.docx"
 MULTI_SOURCE_CSV = (
     "项目,本周工作,问题与风险,下周计划\n"
     "项目甲,完成模型验证，AUC 0.81,样本偏少,补充样本\n"
