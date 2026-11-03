@@ -238,6 +238,8 @@ def validate_rule_preset(payload: dict[str, Any]) -> RulePreset:
         match = section.get("match", {})
         if not isinstance(match, dict) or set(match) - set(aliases):
             raise RulePresetError("来源匹配包含未知字段。")
+        if unmatched_only and match:
+            raise RulePresetError("接纳未匹配行的目录不能再限定字段取值。")
         for values in match.values():
             _string_list(values, "来源匹配值")
         sections.append(

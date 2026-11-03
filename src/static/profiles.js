@@ -82,6 +82,11 @@
     groups.forEach((group,index)=>{
       for(const key of Object.keys(group.match))if(!Object.values(assigned).includes(key))delete group.match[key];
       const box=document.createElement('article'); box.className='outline-group';
+      const header=document.createElement('header');header.className='outline-group-header';
+      const title=document.createElement('h4');title.textContent=`目录规则 ${String(index+1).padStart(2,'0')}`;
+      const badge=document.createElement('span');badge.className='outline-kind';
+      badge.textContent=group.unmatchedOnly?'接纳新增项目':'常规目录';
+      header.append(title);if(group.unmatchedOnly)header.append(badge);box.append(header);
       const path=document.createElement('div'); path.className='outline-path';
       for(let level=0;level<3;level++) {
         const node=input(`目录 ${index+1} ${headingLabels[level]}`,group.path[level] || '');
@@ -104,11 +109,11 @@
       }
       box.append(path);
       const fallback=input(`目录 ${index+1} 接纳未匹配行`,group.unmatchedOnly,'checkbox');
-      fallback.addEventListener('change',()=>{group.unmatchedOnly=fallback.checked;updateSave();});
-      const fallbackLabel=document.createElement('label');
-      fallbackLabel.append(fallback,document.createTextNode('接纳其他目录未覆盖的行（包括以后新增的项目）'));
-      box.append(fallbackLabel);
-      const sourceLabel=document.createElement('p'); sourceLabel.textContent='写入此目录正文的字段（可多选）'; box.append(sourceLabel);
+      fallback.addEventListener('change',()=>{group.unmatchedOnly=fallback.checked;if(group.unmatchedOnly)group.match={};renderGroups();updateSave();});
+      const fallbackLabel=document.createElement('label');fallbackLabel.className='profile-check fallback-check';
+      fallbackLabel.append(fallback,document.createTextNode('接纳其他目录未匹配的行'));
+      const bodyFields=document.createElement('fieldset');bodyFields.className='body-fieldset';
+      const sourceLabel=document.createElement('legend');sourceLabel.textContent='正文字段 · 可多选';bodyFields.append(sourceLabel);
       const sources=document.createElement('div'); sources.className='source-options';
       const choices=Object.keys(assigned).filter(name=>assigned[name]!=='project');
       for(const name of choices) {
@@ -117,10 +122,8 @@
         check.addEventListener('change',()=>check.checked?group.sources.add(name):group.sources.delete(name));
         const label=document.createElement('label'); label.append(check,document.createTextNode(title)); sources.append(label);
       }
-      box.append(sources);
-      const sourceHelp=document.createElement('p');
-      sourceHelp.textContent='勾选字段将组成正文：原文模式直接规范化，模型模式交给 LLM 整理。未勾选字段不作为正文来源，但可用于标题、筛选或模型只读上下文。';
-      box.append(sourceHelp);
+      bodyFields.append(sources);
+      box.append(bodyFields);
       const matches=document.createElement('div'); matches.className='match-options';
       const candidates=rows.filter(row=>Object.hasOwn(group.match,row.select.value)&&row.select.value);
       for(const row of candidates) {
@@ -130,7 +133,7 @@
         options.append(legend);
         const selected=new Set(group.match[key] || []), checks=[];
         const all=input(`目录 ${index+1} 不限制${name}`,selected.size===0,'checkbox');
-        const allLabel=document.createElement('label');allLabel.append(all,document.createTextNode('不限制，包含当前及以后新增的值'));options.append(allLabel);
+        const allLabel=document.createElement('label');allLabel.append(all,document.createTextNode('全部取值（含新增）'));options.append(allLabel);
         const values=[...new Set([...(row.column.values || []),...selected])];
         const sync=()=>{
           all.checked=selected.size===0;
@@ -150,7 +153,7 @@
         remove.addEventListener('click',()=>{delete group.match[key];renderGroups();updateSave();});
         options.append(remove);matches.append(options);
       }
-      const filter=document.createElement('details'), filterTitle=document.createElement('summary');
+      const filter=document.createElement('details'), filterTitle=document.createElement('summary');filter.className='row-filter';
       filterTitle.textContent='只处理指定行（可选）';
       filter.open=Object.keys(group.match).length>0;
       const fieldSelect=document.createElement('select');fieldSelect.setAttribute('aria-label',`目录 ${index+1} 添加筛选字段`);
@@ -160,19 +163,31 @@
       addCondition.disabled=true;fieldSelect.addEventListener('change',()=>addCondition.disabled=!fieldSelect.value);
       addCondition.addEventListener('click',()=>{group.match[fieldSelect.value]=[];renderGroups();updateSave();});
       const filterActions=document.createElement('div');filterActions.className='profile-actions';filterActions.append(fieldSelect,addCondition);
-      filter.append(filterTitle,matches,filterActions);box.append(filter);
+      filter.append(filterTitle,matches,filterActions);if(!group.unmatchedOnly)box.append(filter);
+      box.append(fallbackLabel);
       const actions=document.createElement('div'); actions.className='group-actions';
       for(const [label,action] of [['上移',()=>{if(index){[groups[index-1],groups[index]]=[groups[index],groups[index-1]];}}],
         ['下移',()=>{if(index<groups.length-1){[groups[index+1],groups[index]]=[groups[index],groups[index+1]];}}],
         ['删除',()=>groups.splice(index,1)]]) {
         const button=document.createElement('button'); button.type='button'; button.className='secondary'; button.textContent=label;
         button.setAttribute('aria-label',`${label}目录 ${index+1}`);
+        if(label==='删除')button.classList.add('remove-rule');
+        if((label==='上移'&&index===0)||(label==='下移'&&index===groups.length-1))button.disabled=true;
         button.addEventListener('click',()=>{action();renderGroups();updateSave();}); actions.append(button);
       }
       box.append(actions); byId('outline-groups').append(box);
     });
   }
   byId('add-group').addEventListener('click',()=>{groups.push({headingFields:[],path:[groups[0]?.path[0] || '本周工作','新项目','新事项'],sources:new Set(),match:{}});renderGroups();updateSave();});
+  byId('add-fallback-group').addEventListener('click',()=>{
+    if(groups.some(group=>group.unmatchedOnly))return;
+    const assigned=assignments(), project=Object.keys(assigned).find(name=>assigned[name]==='project');
+    if(!project){alert('请先将一列映射为项目 / 分组。');return;}
+    const sources=new Set(groups.flatMap(group=>[...group.sources]));
+    groups.push({headingFields:[groups[0]?.headingFields[0] || '','',project],
+      path:[groups[0]?.path[0] || '报告内容','待归类',project],sources,match:{},unmatchedOnly:true});
+    renderGroups();updateSave();
+  });
   let statusChecks=[];
   function renderStatuses() {
     const previous = new Map(statusChecks.map(item => [item.value, item.check.checked]));

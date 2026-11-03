@@ -354,12 +354,20 @@ def ensure_unmatched_section(rule: dict) -> None:
     section_id = "unmatched"
     while section_id in ids:
         section_id += "_extra"
+    fields = list(
+        dict.fromkeys(
+            key
+            for item in sections
+            for key in (item.get("source_fields") or [item["source_field"]])
+        )
+    )
+    fields.sort(key=lambda key: key not in {"content", "progress"})
     sections.append(
         {
             "id": section_id,
             "title": "新增项目",
-            "source_field": "content",
-            "source_fields": ["content"],
+            "source_field": fields[0],
+            "source_fields": fields,
             "heading_path": [parent, "待归类", "项目"],
             "heading_fields": [parent_field, "", "project"],
             "match": {},

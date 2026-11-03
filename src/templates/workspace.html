@@ -88,7 +88,6 @@
             <div class="version-card selected current-content-card">
               <div class="version-heading">
                 <b>当前内容</b>
-                <span>{% if block.effective_version == 'generated' %}模型候选 · 用于导出{% elif block.effective_version == 'edited' %}人工编辑 · 用于导出{% else %}原文 · 用于导出（已规范化）{% endif %}</span>
               </div>
               <p>{{ rendered_blocks[block.block_id] }}</p>
             </div>
@@ -107,7 +106,6 @@
             {% endif %}
             <section class="model-candidate" aria-label="模型候选与原文行内差异">
               <div class="version-heading"><b>模型生成结果</b><span>{% if block.effective_version == 'generated' %}当前已采用{% else %}未采用 · 不影响当前导出{% endif %}</span></div>
-              <p class="inline-diff-legend">红色删除线为原文删除，绿色高亮为模型新增；未标记文字保持不变。</p>
               <div class="inline-diff">{% for kind, text in inline_diff(block.original_text, block.generated_text) %}{% if kind == 'removed' %}<del>{{ text }}</del>{% elif kind == 'added' %}<ins>{{ text }}</ins>{% else %}<span>{{ text }}</span>{% endif %}{% endfor %}</div>
               <details class="candidate-full-text"><summary>查看完整模型文本</summary><p>{{ block.generated_text }}</p></details>
             </section>
@@ -246,7 +244,7 @@
 
   <dialog id="edit-confirmation" class="edit-confirmation" aria-labelledby="edit-confirmation-title">
     <h2 id="edit-confirmation-title">确认本次人工修改</h2>
-    <p>以下对比仅显示当前内容与本次修改。确认后直接生效，不进行模型事实校验。</p>
+    <p>确认本次修改后直接生效，不再进行模型事实校验。</p>
     <div class="unified-diff edit-confirmation-diff" aria-label="本次人工修改前后对比"></div>
     <p class="edit-confirmation-error" role="alert" hidden></p>
     <div class="edit-confirmation-actions">
@@ -256,7 +254,7 @@
   </dialog>
 
   <div id="processing-overlay" class="processing-overlay" role="status" aria-live="polite" aria-hidden="true">
-    <div class="processing-panel"><span class="spinner" aria-hidden="true"></span><strong>正在更新当前文档</strong><p>保存后会生成新的文档版本，请稍候。</p><button type="button" class="secondary" id="cancel-workspace-task" hidden>取消任务</button></div>
+    <div class="processing-panel"><span class="spinner" aria-hidden="true"></span><strong>正在更新当前文档</strong><button type="button" class="secondary" id="cancel-workspace-task" hidden>取消任务</button></div>
   </div>
   <script src="{{ url_for('static', filename='task-client.js') }}"></script>
   <script src="{{ url_for('static', filename='workspace.js') }}"></script>

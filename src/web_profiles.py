@@ -23,6 +23,7 @@ from flask import (
 )
 
 from .adaptation import (
+    ensure_unmatched_section,
     inspect_requirements,
     inspect_table,
     inspect_template,
@@ -181,6 +182,7 @@ def analyze():
             if table["layout"] == "records":
                 old["input"]["historical_completion"] = None
             proposal = old
+        ensure_unmatched_section(proposal)
         # Explicit instructions inside DOCX are evidence separate from incidental styles.
         # User-supplied instructions come last and remain subject to conflict confirmation.
         requirements_text = (
