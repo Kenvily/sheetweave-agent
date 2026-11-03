@@ -852,3 +852,7 @@ h2 { line-height: 1.45; }
 @media (max-width: 960px) {
   .workspace-focus .review-panel { max-height: none; }
 }
+
+/* Original-row pictures remain inside the existing review panels. */
+.source-pictures { display: grid; gap: 12px; margin: 12px 0; min-width: 0; }
+.source-pictures img { display: block; width: auto; max-width: 100%; height: auto; max-height: 640px; object-fit: contain; object-position: left top; border-radius: 4px; }

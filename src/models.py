@@ -57,12 +57,29 @@ class ParagraphKind(str, Enum):
 
 
 @dataclass(frozen=True, slots=True)
+class SourceImage:
+    """An immutable local picture anchored to a worksheet row and column."""
+
+    image_id: str
+    data: str
+    extension: str
+    width: int
+    height: int
+    column: int
+
+    @property
+    def mime_type(self) -> str:
+        return "image/png" if self.extension == "png" else "image/jpeg"
+
+
+@dataclass(frozen=True, slots=True)
 class ReportParagraph:
     """A paragraph and the semantic style to apply to it."""
 
     text: str
     kind: ParagraphKind
     block_id: str | None = None
+    images: tuple[SourceImage, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -98,6 +115,7 @@ class SourceRecord:
     original_text: str
     raw_values: tuple[str, ...] = ()
     historical_completed: bool = False
+    images: tuple[SourceImage, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)

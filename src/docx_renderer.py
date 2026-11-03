@@ -10,6 +10,7 @@ from pathlib import Path
 from xml.etree import ElementTree as ET
 
 from .document_style import default_styles, paragraph_style
+from .docx_images import append_picture, image_parts
 from .docx_security import inspect_docx_package
 from .models import ParagraphKind, ReportParagraph, ReportPlan
 from .word_lists import REL_NS, build_lists, numbering_part, serialize, wire_numbering
@@ -139,6 +140,7 @@ def _document_xml(
     styles: dict | None = None,
     heading_styles: dict[ParagraphKind, str] | None = None,
     native_lists: dict[int, tuple[str, int, str, str]] | None = None,
+    image_relationships: dict[str, str] | None = None,
 ) -> bytes:
     template_root = ET.fromstring(template_xml)
     template_body = template_root.find(_qn("body"))
@@ -150,10 +152,39 @@ def _document_xml(
 
     root = ET.Element(_qn("document"))
     body = ET.SubElement(root, _qn("body"))
+    page_width, page_height = 9026, 13958
+    if section_properties is not None:
+        size = section_properties.find(_qn("pgSz"))
+        margins = section_properties.find(_qn("pgMar"))
+        if size is not None and margins is not None:
+            page_width = (
+                int(size.get(_qn("w")))
+                - int(margins.get(_qn("left"), "0"))
+                - int(margins.get(_qn("right"), "0"))
+            )
+            page_height = (
+                int(size.get(_qn("h")))
+                - int(margins.get(_qn("top"), "0"))
+                - int(margins.get(_qn("bottom"), "0"))
+            )
+    picture_id = max(
+        (int(n.get("id", "0")) for n in template_root.iter() if n.tag.endswith("}docPr")), default=0
+    )
     for index, paragraph in enumerate(plan.paragraphs):
-        body.append(
-            _paragraph_element(paragraph, styles, heading_styles, (native_lists or {}).get(index))
+        node = _paragraph_element(
+            paragraph, styles, heading_styles, (native_lists or {}).get(index)
         )
+        for image in paragraph.images:
+            picture_id += 1
+            append_picture(
+                node,
+                image,
+                image_relationships[image.image_id],
+                picture_id,
+                max(1, page_width - 720) * 635,
+                max(1, page_height - 1440) * 635,
+            )
+        body.append(node)
     if section_properties is not None:
         body.append(section_properties)
     else:
@@ -203,9 +234,18 @@ def render_docx(
             )
             content_types = ET.fromstring(source.read("[Content_Types].xml"))
             wire_numbering(relationships, content_types, list_part)
+            pictures, picture_links = image_parts(
+                plan, relationships, content_types, set(source.namelist())
+            )
             replacements = {
+                **pictures,
                 DOCUMENT_PART: _document_xml(
-                    plan, source.read(DOCUMENT_PART), styles, heading_styles, lists.paragraphs
+                    plan,
+                    source.read(DOCUMENT_PART),
+                    styles,
+                    heading_styles,
+                    lists.paragraphs,
+                    picture_links,
                 ),
                 STYLES_PART: lists.styles,
                 list_part: lists.numbering,

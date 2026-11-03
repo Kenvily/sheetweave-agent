@@ -58,6 +58,7 @@ class SectionRule:
     heading_fields: tuple[str, ...] = ()
     match: dict = field(default_factory=dict)
     unmatched_only: bool = False
+    accept_unmatched: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -193,6 +194,7 @@ def validate_rule_preset(payload: dict[str, Any]) -> RulePreset:
             "heading_fields",
             "match",
             "unmatched_only",
+            "accept_unmatched",
             "group_by",
             "llm_editable",
         }:
@@ -235,6 +237,11 @@ def validate_rule_preset(payload: dict[str, Any]) -> RulePreset:
         unmatched_only = section.get("unmatched_only", False)
         if not isinstance(unmatched_only, bool):
             raise RulePresetError("unmatched_only 必须是布尔值。")
+        accept_unmatched = section.get("accept_unmatched", False)
+        if not isinstance(accept_unmatched, bool):
+            raise RulePresetError("accept_unmatched 必须是布尔值。")
+        if accept_unmatched and (unmatched_only or any(heading_fields)):
+            raise RulePresetError("已有目录接纳新增项目须使用固定标题，且不能同时是独立兜底目录。")
         match = section.get("match", {})
         if not isinstance(match, dict) or set(match) - set(aliases):
             raise RulePresetError("来源匹配包含未知字段。")
@@ -254,14 +261,15 @@ def validate_rule_preset(payload: dict[str, Any]) -> RulePreset:
                 heading_fields=tuple(heading_fields),
                 match=match,
                 unmatched_only=unmatched_only,
+                accept_unmatched=accept_unmatched,
             )
         )
     if any(item.heading_path for item in sections) and not all(
         item.heading_path for item in sections
     ):
         raise RulePresetError("自定义目录不能与旧章节规则混用。")
-    if sum(section.unmatched_only for section in sections) > 1:
-        raise RulePresetError("只能设置一个接纳未匹配行的目录。")
+    if sum(section.unmatched_only or section.accept_unmatched for section in sections) > 1:
+        raise RulePresetError("只能选择一个接纳新增项目的目标目录。")
     section_ids = [section.id for section in sections]
     if len(set(section_ids)) != len(section_ids):
         raise RulePresetError("章节 id 不能重复。")

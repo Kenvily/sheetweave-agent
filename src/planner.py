@@ -269,7 +269,15 @@ def build_prepared_report_plan(
                         ParagraphKind.HEADING_3,
                     )
                 )
-                paragraphs.extend(build_body_paragraphs(block.effective_text, report_date))
+                segment = list(build_body_paragraphs(block.effective_text, report_date))
+                images = tuple(
+                    image
+                    for row in prepared.sources_for_block(block.block_id)
+                    for image in row.images
+                )
+                if segment and images:
+                    segment[-1] = replace(segment[-1], images=images)
+                paragraphs.extend(segment)
     if len(paragraphs) == 2:
         raise ValueError("当前规则没有生成任何有效内容块。")
     return ReportPlan(
@@ -302,8 +310,11 @@ def prepared_body_paragraphs(prepared, preset, report_date):
             ]
         paragraphs = []
         local_offset = 0
-        for text in texts:
+        for source_index, text in enumerate(texts):
             segment = list(build_body_paragraphs(text, report_date))
+            if block.effective_version == "original" and len(block.source_ids) > 1 and segment:
+                row = prepared.source_by_id(block.source_ids[source_index])
+                segment[-1] = replace(segment[-1], images=row.images)
             for paragraph in segment:
                 if paragraph.kind is ParagraphKind.BODY_1:
                     match = TOP_LEVEL_NUMBER.match(paragraph.text)
@@ -316,9 +327,14 @@ def prepared_body_paragraphs(prepared, preset, report_date):
         for paragraph in paragraphs:
             if paragraph.kind is ParagraphKind.BODY_1:
                 match = TOP_LEVEL_NUMBER.match(paragraph.text)
-                paragraph = ReportParagraph(f"{int(match[1]) + start}、{match[2]}", paragraph.kind)
+                paragraph = replace(paragraph, text=f"{int(match[1]) + start}、{match[2]}")
             adjusted.append(paragraph)
         offsets[key] = start + sum(p.kind is ParagraphKind.BODY_1 for p in paragraphs)
+        images = tuple(
+            image for row in prepared.sources_for_block(block.block_id) for image in row.images
+        )
+        if adjusted and images and not any(p.images for p in adjusted):
+            adjusted[-1] = replace(adjusted[-1], images=images)
         result[block.block_id] = tuple(
             replace(p, block_id=block.block_id)
             for p in format_body(adjusted, preset.document.numbering)

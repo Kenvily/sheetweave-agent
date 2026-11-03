@@ -62,7 +62,7 @@
 .match-values label { margin-bottom: 8px; }
 .match-values button { margin-top: 4px; }
 .row-filter .profile-actions { padding: 0 16px 16px; }
-.fallback-check { margin-top: 20px; }
+.new-project-routing { margin-bottom: 20px; }
 .group-actions { display: flex; align-items: center; gap: 8px; margin-top: 20px; padding-top: 16px; border-top: 1px solid var(--line); }
 .group-actions button { min-width: 64px; }
 .group-actions .remove-rule { margin-left: auto; color: var(--danger); }

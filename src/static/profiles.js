@@ -72,7 +72,7 @@
   function makeGroup(section) {
     return { headingFields:(section.heading_fields || []).map(key=>key?originalColumn(key):''), path:[...(section.heading_path?.length ? section.heading_path : [section.title])],
       sources:new Set((section.source_fields?.length ? section.source_fields : [section.source_field]).map(key=>key==='progress'?(originalColumn('content') || originalColumn('progress') || primaryWeek):originalColumn(key)).filter(Boolean)),
-      unmatchedOnly:Boolean(section.unmatched_only),match:structuredClone(section.match || {})};
+      unmatchedOnly:Boolean(section.unmatched_only),acceptUnmatched:Boolean(section.accept_unmatched),match:structuredClone(section.match || {})};
   }
   base.sections.forEach(section=>groups.push(makeGroup(section)));
   function renderGroups() {
@@ -85,7 +85,7 @@
       const header=document.createElement('header');header.className='outline-group-header';
       const title=document.createElement('h4');title.textContent=`目录规则 ${String(index+1).padStart(2,'0')}`;
       const badge=document.createElement('span');badge.className='outline-kind';
-      badge.textContent=group.unmatchedOnly?'接纳新增项目':'常规目录';
+      badge.textContent='待归类';
       header.append(title);if(group.unmatchedOnly)header.append(badge);box.append(header);
       const path=document.createElement('div'); path.className='outline-path';
       for(let level=0;level<3;level++) {
@@ -100,18 +100,14 @@
           group.headingFields[level]=source.value;
           if(source.value)group.path[level]=source.value;
           else group.path[level]=node.value;
-          sync();updateSave();
+          sync();renderNewProjectTarget();updateSave();
         });
         node.placeholder=level ? '可留空，不生成此层标题' : '填写固定标题';
-        node.addEventListener('input',()=>{group.path[level]=node.value;});
+        node.addEventListener('input',()=>{group.path[level]=node.value;renderNewProjectTarget();});
         const controls=document.createElement('div');controls.append(source,node);sync();
         path.append(field(headingLabels[level],controls));
       }
       box.append(path);
-      const fallback=input(`目录 ${index+1} 接纳未匹配行`,group.unmatchedOnly,'checkbox');
-      fallback.addEventListener('change',()=>{group.unmatchedOnly=fallback.checked;if(group.unmatchedOnly)group.match={};renderGroups();updateSave();});
-      const fallbackLabel=document.createElement('label');fallbackLabel.className='profile-check fallback-check';
-      fallbackLabel.append(fallback,document.createTextNode('接纳其他目录未匹配的行'));
       const bodyFields=document.createElement('fieldset');bodyFields.className='body-fieldset';
       const sourceLabel=document.createElement('legend');sourceLabel.textContent='正文字段 · 可多选';bodyFields.append(sourceLabel);
       const sources=document.createElement('div'); sources.className='source-options';
@@ -164,7 +160,6 @@
       addCondition.addEventListener('click',()=>{group.match[fieldSelect.value]=[];renderGroups();updateSave();});
       const filterActions=document.createElement('div');filterActions.className='profile-actions';filterActions.append(fieldSelect,addCondition);
       filter.append(filterTitle,matches,filterActions);if(!group.unmatchedOnly)box.append(filter);
-      box.append(fallbackLabel);
       const actions=document.createElement('div'); actions.className='group-actions';
       for(const [label,action] of [['上移',()=>{if(index){[groups[index-1],groups[index]]=[groups[index],groups[index-1]];}}],
         ['下移',()=>{if(index<groups.length-1){[groups[index+1],groups[index]]=[groups[index],groups[index+1]];}}],
@@ -177,15 +172,35 @@
       }
       box.append(actions); byId('outline-groups').append(box);
     });
+    renderNewProjectTarget();
   }
   byId('add-group').addEventListener('click',()=>{groups.push({headingFields:[],path:[groups[0]?.path[0] || '本周工作','新项目','新事项'],sources:new Set(),match:{}});renderGroups();updateSave();});
-  byId('add-fallback-group').addEventListener('click',()=>{
-    if(groups.some(group=>group.unmatchedOnly))return;
-    const assigned=assignments(), project=Object.keys(assigned).find(name=>assigned[name]==='project');
-    if(!project){alert('请先将一列映射为项目 / 分组。');return;}
-    const sources=new Set(groups.flatMap(group=>[...group.sources]));
-    groups.push({headingFields:[groups[0]?.headingFields[0] || '','',project],
-      path:[groups[0]?.path[0] || '报告内容','待归类',project],sources,match:{},unmatchedOnly:true});
+  function renderNewProjectTarget() {
+    const select=byId('new-project-target');
+    select.replaceChildren(new Option('不接纳，未匹配时提示补充规则','none'),new Option('单独归入“待归类”目录','separate'));
+    groups.forEach((group,index)=>{
+      if(!group.unmatchedOnly&&!group.headingFields.some(Boolean))select.append(new Option(group.path.filter(Boolean).join(' / ') || `目录 ${index+1}`,String(index)));
+    });
+    const target=groups.findIndex(group=>group.acceptUnmatched);
+    select.value=groups.some(group=>group.unmatchedOnly)?'separate':target>=0?String(target):'none';
+  }
+  let detachedFallback=null;
+  byId('new-project-target').addEventListener('change',event=>{
+    const value=event.target.value;
+    const target=value==='none'||value==='separate'?null:groups[Number(value)];
+    const existing=groups.find(group=>group.unmatchedOnly);
+    if(existing)detachedFallback=existing;
+    for(let index=groups.length-1;index>=0;index--){
+      groups[index].acceptUnmatched=false;
+      if(groups[index].unmatchedOnly)groups.splice(index,1);
+    }
+    if(value==='separate'){
+      const assigned=assignments(), project=Object.keys(assigned).find(name=>assigned[name]==='project');
+      if(!project){alert('请先将一列映射为项目 / 分组。');renderGroups();updateSave();return;}
+      const sources=new Set(groups.flatMap(group=>[...group.sources]));
+      groups.push(detachedFallback || {headingFields:[groups[0]?.headingFields[0] || '','',project],
+        path:[groups[0]?.path[0] || '报告内容','待归类',project],sources,match:{},unmatchedOnly:true});
+    }else if(target)target.acceptUnmatched=true;
     renderGroups();updateSave();
   });
   let statusChecks=[];
@@ -244,7 +259,7 @@
     const fields=Object.values(assigned);
     if(new Set(fields).size!==fields.length) throw Error('每个语义用途只能选择一列；其他正文列请选择其他内容，再勾选写入正文。');
     rule.input.column_aliases=Object.fromEntries(Object.entries(assigned).map(([column,key])=>[key,[column]]));
-    if(groups.filter(group=>group.unmatchedOnly).length>1)throw Error('只能设置一个接纳未匹配行的目录。');
+    if(groups.filter(group=>group.unmatchedOnly||group.acceptUnmatched).length>1)throw Error('只能选择一个接纳新增项目的目标目录。');
     rule.sections=groups.map((group,index)=>{
       const path=group.path.map((value,level)=>(group.headingFields[level] || value).trim());while(path.length&&!path.at(-1))path.pop();
       const headingFields=path.map((_,level)=>{
@@ -252,6 +267,7 @@
         if(name&&!assigned[name])throw Error(`目录 ${index+1} 的标题来源字段已停用，请重新选择。`);
         return name?assigned[name]:'';
       });
+      if(group.acceptUnmatched&&headingFields.some(Boolean))throw Error('接纳新增项目的已有目录须使用固定标题，请重新选择目标目录。');
       if(!path.length||path.some(value=>!value))throw Error(`目录 ${index+1} 的标题层级不完整。`);
       const selectedSources=[...group.sources].filter(name=>assigned[name]);
       selectedSources.sort((a,b)=>(assigned[b]==='content')-(assigned[a]==='content'));
@@ -260,7 +276,7 @@
       if(!sourceFields.length)throw Error(`请选择目录 ${index+1} 要整合的内容。`);
       const match={};for(const [key,values] of Object.entries(group.match)){if(fields.includes(key)&&values.length)match[key]=values;}
       return {id:`section_${index+1}`,title:path.at(-1),source_field:sourceFields[0],source_fields:sourceFields,
-        heading_path:path,heading_fields:headingFields,match,unmatched_only:Boolean(group.unmatchedOnly),group_by:'section',llm_editable:sourceFields.some(key=>!['project','detail','status','owner'].includes(key))};
+        heading_path:path,heading_fields:headingFields,match,unmatched_only:Boolean(group.unmatchedOnly),accept_unmatched:Boolean(group.acceptUnmatched),group_by:'section',llm_editable:sourceFields.some(key=>!['project','detail','status','owner'].includes(key))};
     });
     if(statusChecks.length)rule.input.status_policy={known:statusChecks.map(item=>item.value),include:statusChecks.filter(item=>item.check.checked).map(item=>item.value),unknown:'keep'};
     else delete rule.input.status_policy;

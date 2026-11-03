@@ -12,7 +12,8 @@ from pathlib import Path
 from typing import Any
 
 from .csv_parser import CsvFormatError, discover_week_columns, select_week_column
-from .models import ParsedInput, SourceFile, SourceRecord, WeekColumn
+from .excel_images import read_excel_images
+from .models import ParsedInput, SourceFile, SourceImage, SourceRecord, WeekColumn
 from .rules import HistoricalCompletionRule, RulePreset
 
 SUPPORTED_SUFFIXES = {".csv", ".xlsx"}
@@ -196,13 +197,26 @@ def _parse_weekly_matrix(
     available_sheets: tuple[str, ...],
     requested_week: str | None,
     overrides: dict[str, str] | None,
+    images: dict[int, tuple[SourceImage, ...]] | None = None,
 ) -> ParsedInput:
+    images = images or {}
     if len(rows) <= preset.input.header_rows:
         raise InputFormatError("输入至少需要两行表头和一行数据。")
     headers = _unique_headers(rows[0])
     try:
         week_columns = discover_week_columns(rows)
-        week_column = select_week_column(rows, week_columns, requested_week)
+        selection_rows = [list(row) for row in rows]
+        periods = {column.index for column in week_columns}
+        for row_number, pictures in images.items():
+            if preset.input.header_rows < row_number <= len(selection_rows):
+                for picture in pictures:
+                    if picture.column in periods:
+                        selection_rows[row_number - 1].extend(
+                            [""] * max(0, picture.column + 1 - len(selection_rows[row_number - 1]))
+                        )
+                        if not selection_rows[row_number - 1][picture.column]:
+                            selection_rows[row_number - 1][picture.column] = "附图。"
+        week_column = select_week_column(selection_rows, week_columns, requested_week)
     except CsvFormatError as exc:
         raise InputFormatError(str(exc)) from exc
     resolved_overrides = dict(overrides or {})
@@ -227,7 +241,12 @@ def _parse_weekly_matrix(
         body_index = mapping.get("content", week_column.index)
         if any(column.index == body_index for column in week_columns):
             body_index = week_column.index
-        progress = _value(row, body_index)
+        pictures = tuple(
+            image
+            for image in images.get(row_number, ())
+            if image.column not in periods or image.column == body_index
+        )
+        progress = _value(row, body_index) or ("附图。" if pictures else "")
         if not project:
             continue
         historical_completed = _should_mark_historical_completion(
@@ -258,6 +277,7 @@ def _parse_weekly_matrix(
                 original_text=progress,
                 raw_values=tuple(row),
                 historical_completed=historical_completed,
+                images=pictures,
             )
         )
     if not sources:
@@ -288,7 +308,9 @@ def _parse_records(
     sheet: str | None,
     available_sheets: tuple[str, ...],
     overrides: dict[str, str] | None,
+    images: dict[int, tuple[SourceImage, ...]] | None = None,
 ) -> ParsedInput:
+    images = images or {}
     header_index = preset.input.header_rows - 1
     if len(rows) <= header_index + 1:
         raise InputFormatError("输入文件只有表头，没有数据行。")
@@ -301,6 +323,8 @@ def _parse_records(
             continue
         if not fields.get("project"):
             raise InputFormatError(f"第 {row_number} 行缺少项目名称。")
+        if not fields.get("content") and images.get(row_number):
+            fields["content"] = "附图。"
         if not fields.get("content"):
             raise InputFormatError(f"第 {row_number} 行缺少本周工作内容。")
         original = "\n".join(value for value in fields.values() if value)
@@ -313,6 +337,7 @@ def _parse_records(
                 fields=fields,
                 original_text=original,
                 raw_values=tuple(row),
+                images=images.get(row_number, ()),
             )
         )
     if not sources:
@@ -373,6 +398,12 @@ def parse_input(
             path, sheet, preferred_sheet=preset.input.sheet_default
         )
         file_type = "xlsx"
+    images, image_warnings = {}, ()
+    if file_type == "xlsx":
+        try:
+            images, image_warnings = read_excel_images(path, selected_sheet)
+        except ValueError as exc:
+            raise InputFormatError(str(exc)) from exc
     filename = display_filename or path.name
     if preset.input.layout == "weekly_matrix":
         parsed = _parse_weekly_matrix(
@@ -384,6 +415,7 @@ def parse_input(
             available_sheets,
             requested_week,
             field_mapping,
+            images,
         )
     else:
         parsed = _parse_records(
@@ -394,12 +426,14 @@ def parse_input(
             selected_sheet,
             available_sheets,
             field_mapping,
+            images,
         )
 
     if not _headers_match(rows, preset, parsed.headers):
         raise InputFormatError(
             "固定字段表头结构与已确认方案不同，请进入方案适配重新分析、确认并保存新版本。"
         )
+    parsed = replace(parsed, warnings=parsed.warnings + image_warnings)
     policy = preset.input.status_policy
     if not policy:
         return parsed

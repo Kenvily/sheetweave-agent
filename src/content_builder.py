@@ -33,30 +33,53 @@ def block_heading_path(prepared, section, block) -> tuple[str, ...]:
     return record_heading_path(section, record)
 
 
+def _matches(section, record) -> bool:
+    return all(
+        record.fields.get(key, "").strip() in values for key, values in section.match.items()
+    )
+
+
+def _source_text(section, record) -> str:
+    fields = section.source_fields or (section.source_field,)
+    text = "\n".join(
+        record.fields.get(key, "").strip() for key in fields if record.fields.get(key, "").strip()
+    )
+    return text or ("附图。" if record.images else "")
+
+
+def unmatched_source_ids(source: ParsedInput, preset: RulePreset) -> set[str]:
+    """Identify unassigned rows before expanding the selected destination's scope."""
+    return {
+        record.source_id
+        for record in source.sources
+        if not any(
+            not section.unmatched_only
+            and _matches(section, record)
+            and _source_text(section, record)
+            for section in preset.sections
+        )
+    }
+
+
 def build_content_blocks(source: ParsedInput, preset: RulePreset) -> tuple[ContentBlock, ...]:
     """Apply section/group rules while preserving complete source relationships."""
     blocks: list[ContentBlock] = []
     covered = set()
+    unmatched = unmatched_source_ids(source, preset)
     # Ordinary routes always run first, regardless of editor ordering.
     for section in sorted(preset.sections, key=lambda item: item.unmatched_only):
         grouped: OrderedDict[tuple[str, bool, tuple[str, ...]], list[tuple[str, str]]] = (
             OrderedDict()
         )
         for record in source.sources:
-            if section.unmatched_only and record.source_id in covered:
-                continue
-            if section.match and not all(
-                record.fields.get(key, "").strip() in values
-                for key, values in section.match.items()
+            if section.unmatched_only:
+                if record.source_id not in unmatched:
+                    continue
+            elif not _matches(section, record) and not (
+                section.accept_unmatched and record.source_id in unmatched
             ):
                 continue
-            fields = section.source_fields or (section.source_field,)
-            values = [
-                (field, record.fields.get(field, "").strip())
-                for field in fields
-                if record.fields.get(field, "").strip()
-            ]
-            text = "\n".join(value for _field, value in values)
+            text = _source_text(section, record)
             if not text:
                 continue
             covered.add(record.source_id)

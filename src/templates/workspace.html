@@ -15,6 +15,9 @@
     {% for value in [75, 85, 100, 115, 125, 150] %}<option value="{{ value }}"{% if value == 100 %} selected{% endif %}>{{ value }}%</option>{% endfor %}
   </select></label>
   {% endmacro %}
+  {% macro pictures(images) %}
+  {% if images %}<div class="source-pictures">{% for image in images %}<img src="{{ url_for('source_picture', token=session.token, image_id=image.image_id) }}" alt="来源行附图 {{ loop.index }}" loading="lazy" width="{{ image.width }}" height="{{ image.height }}">{% endfor %}</div>{% endif %}
+  {% endmacro %}
   <main id="main-content" class="workspace-container" tabindex="-1">
     <header class="workspace-header">
       <div>
@@ -66,6 +69,7 @@
                 {% if value %}<div><dt>{{ header }}</dt><dd>{{ value }}</dd></div>{% endif %}
               {% endfor %}
             </dl>
+            {{ pictures(source.images) }}
           </article>
           {% endfor %}
         </div>
@@ -89,7 +93,7 @@
               <div class="version-heading">
                 <b>当前内容</b>
               </div>
-              <p>{{ rendered_blocks[block.block_id] }}</p>
+              {% for paragraph in rendered_paragraphs[block.block_id] %}<p>{{ paragraph.text }}</p>{{ pictures(paragraph.images) }}{% endfor %}
             </div>
 
             {% if block.generated_text %}
@@ -204,7 +208,7 @@
             {% for item in directory_preview %}
               {% if item.block_id %}
               <div class="preview-entry" tabindex="0" data-preview-block="{{ item.block_id }}" aria-label="定位此段的来源和审核内容">
-                {% for paragraph in item.paragraphs %}<p style="text-indent: {{ body_indent(paragraph.kind) }}em">{{ paragraph.text }}</p>{% endfor %}
+                {% for paragraph in item.paragraphs %}<p style="text-indent: {{ body_indent(paragraph.kind) }}em">{{ paragraph.text }}</p>{{ pictures(paragraph.images) }}{% endfor %}
               </div>
               {% elif item.level == 1 %}<h3>{{ item.text }}</h3>
               {% elif item.level == 2 %}<h4>{{ item.text }}</h4>
@@ -219,7 +223,7 @@
                 {% for block in section_blocks %}
                 <div class="preview-entry" tabindex="0" data-preview-block="{{ block.block_id }}" aria-label="定位 {{ normalize_text(block.group_key) }} 的来源和审核内容">
                   <h4>{{ normalize_text(block.group_key) }}</h4>
-                  {% for paragraph in rendered_paragraphs[block.block_id] %}<p style="text-indent: {{ body_indent(paragraph.kind) }}em">{{ paragraph.text }}</p>{% endfor %}
+                  {% for paragraph in rendered_paragraphs[block.block_id] %}<p style="text-indent: {{ body_indent(paragraph.kind) }}em">{{ paragraph.text }}</p>{{ pictures(paragraph.images) }}{% endfor %}
                 </div>
                 {% endfor %}
               </section>

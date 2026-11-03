@@ -1,6 +1,7 @@
 # Local agent skills and editor settings
 /.agents/
 /.vscode/
+/.codex/
 
 # Python caches and build artifacts
 __pycache__/
