@@ -14,7 +14,7 @@ from sheetweave_agent.numbering import renumber, validate_numbering
 from sheetweave_agent.validator import ReportValidationError, validate_report
 from sheetweave_agent.word_lists import BODY_KINDS, NUMBERING_REL, qn, read_lists
 
-TEMPLATE = Path("data/研发三部周报模板-v2.docx")
+TEMPLATE = Path("tests/fixtures/templates/reference.docx")
 
 
 def plan():

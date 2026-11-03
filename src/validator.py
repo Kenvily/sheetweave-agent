@@ -9,6 +9,7 @@ from pathlib import Path
 from xml.etree import ElementTree as ET
 
 from .document_style import paragraph_style
+from .docx_images import validate_images
 from .docx_renderer import BODY_KINDS, DOCUMENT_PART, HEADING_KINDS, STYLES_PART, WORD_NS
 from .docx_security import DocxSecurityError, inspect_docx_package
 from .models import ParagraphKind, ReportPlan
@@ -281,6 +282,7 @@ def validate_report(
                 ):
                     raise ReportValidationError("DOCX 编号部件类型无效。")
                 list_root = ET.fromstring(package.read(part))
+            validate_images(package, root, rels, expected_plan)
     except (zipfile.BadZipFile, ET.ParseError, KeyError, ValueError) as exc:
         raise ReportValidationError(f"DOCX 文件无效：{exc}") from exc
 

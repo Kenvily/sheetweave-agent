@@ -31,7 +31,7 @@ def test_renders_valid_docx_with_all_required_styles(tmp_path: Path) -> None:
     plan = build_report_plan(data, date(2026, 9, 24), section_number=12)
     output = tmp_path / "report.docx"
 
-    render_docx(plan, ROOT / "data/研发三部周报模板-v2.docx", output)
+    render_docx(plan, ROOT / "tests/fixtures/templates/reference.docx", output)
     result = validate_report(output, section_number=12)
 
     assert result.heading_count == 3
@@ -88,7 +88,7 @@ def test_heading_styles_define_navigation_levels_without_replacing_template_styl
     )
     plan = build_report_plan(data, date(2026, 9, 24))
     first, second = tmp_path / "first.docx", tmp_path / "second.docx"
-    render_docx(plan, ROOT / "data/研发三部周报模板-v2.docx", first)
+    render_docx(plan, ROOT / "tests/fixtures/templates/reference.docx", first)
     # An exported document can itself be uploaded as a template. Its styles must survive.
     render_docx(plan, first, second)
     with zipfile.ZipFile(first) as package:
@@ -136,7 +136,7 @@ def test_validator_rejects_heading_with_visual_format_but_no_outline(tmp_path):
     )
     plan = build_report_plan(data, date(2026, 9, 24))
     original = tmp_path / "original.docx"
-    render_docx(plan, ROOT / "data/研发三部周报模板-v2.docx", original)
+    render_docx(plan, ROOT / "tests/fixtures/templates/reference.docx", original)
     for fault in ("missing_outline", "wrong_outline", "missing_style", "missing_definition"):
         broken = tmp_path / f"{fault}.docx"
         with zipfile.ZipFile(original) as source, zipfile.ZipFile(broken, "w") as target:
@@ -179,7 +179,7 @@ def test_third_body_indent_is_relative_to_second_even_for_existing_profiles(tmp_
     )
     plan = build_report_plan(data, date(2026, 10, 19))
     output = tmp_path / "indented.docx"
-    render_docx(plan, ROOT / "data/研发三部周报模板-v2.docx", output, styles=styles)
+    render_docx(plan, ROOT / "tests/fixtures/templates/reference.docx", output, styles=styles)
     validate_report(output, styles=styles)
     with zipfile.ZipFile(output) as source:
         parts = {item.filename: source.read(item.filename) for item in source.infolist()}

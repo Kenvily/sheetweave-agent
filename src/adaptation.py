@@ -337,6 +337,47 @@ def propose_rule(table: dict, template: dict) -> dict:
     return rule
 
 
+def ensure_unmatched_section(rule: dict) -> None:
+    """Keep sample-specific routes open to future values without guessing their meaning."""
+    sections = rule.get("sections", [])
+    if not sections or not all(item.get("heading_path") for item in sections):
+        return
+    if any(item.get("unmatched_only") or item.get("accept_unmatched") for item in sections):
+        return
+    # An unrestricted route already covers future values.
+    if any(not item.get("match") for item in sections):
+        return
+    first = sections[0]
+    parent = first["heading_path"][0]
+    parent_field = (first.get("heading_fields") or [""])[0]
+    ids = {item["id"] for item in sections}
+    section_id = "unmatched"
+    while section_id in ids:
+        section_id += "_extra"
+    fields = list(
+        dict.fromkeys(
+            key
+            for item in sections
+            for key in (item.get("source_fields") or [item["source_field"]])
+        )
+    )
+    fields.sort(key=lambda key: key not in {"content", "progress"})
+    sections.append(
+        {
+            "id": section_id,
+            "title": "新增项目",
+            "source_field": fields[0],
+            "source_fields": fields,
+            "heading_path": [parent, "待归类", "项目"],
+            "heading_fields": [parent_field, "", "project"],
+            "match": {},
+            "group_by": "section",
+            "llm_editable": True,
+            "unmatched_only": True,
+        }
+    )
+
+
 def assist_mapping(table: dict, *, client, model: str) -> dict:
     """At most two schema-bounded model attempts; metadata only, no row bodies."""
     messages = [
@@ -533,6 +574,7 @@ def suggest_profile(source: Path, template: Path, analysis: dict, *, client, mod
         "固定父标题下允许动态子标题。合并时相同最终标题才组成区块，不跨不同标题混合。"
         "正文不需要每个Excel字段都创建章节，可将多个字段分条整合到同一目录。"
         "严格遵循用户desired_outline指定的目录顺序；否则参考文档目录，提出简洁结构。"
+        "样例取值不是封闭名单；新增项目可由一个unmatched_only=true目录接纳，或将一个固定标题目录设为accept_unmatched=true，保留其match同时接纳其余未归类行；二者只能选一处。"
         "必须覆盖所有有内容的样例项目，不知道归属时保留在待归类目录并提问，不要静默丢弃。"
         "状态默认全部保留，不能仅凭已完成推断是历史完成。"
         "document含report_title,template,heading_start_default,styles,numbering；"
@@ -569,6 +611,7 @@ def suggest_profile(source: Path, template: Path, analysis: dict, *, client, mod
                 )
                 if primary:
                     rule["input"]["column_aliases"]["content"] = primary
+            ensure_unmatched_section(rule)
             rule["document"]["numbering"] = validate_numbering(rule["document"].get("numbering"))
             if not all(section.get("heading_path") for section in rule["sections"]):
                 raise ValueError("请给每个内容组填写heading_path。")

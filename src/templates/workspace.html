@@ -15,6 +15,9 @@
     {% for value in [75, 85, 100, 115, 125, 150] %}<option value="{{ value }}"{% if value == 100 %} selected{% endif %}>{{ value }}%</option>{% endfor %}
   </select></label>
   {% endmacro %}
+  {% macro pictures(images) %}
+  {% if images %}<div class="source-pictures">{% for image in images %}<img src="{{ url_for('source_picture', token=session.token, image_id=image.image_id) }}" alt="来源行附图 {{ loop.index }}" loading="lazy" width="{{ image.width }}" height="{{ image.height }}">{% endfor %}</div>{% endif %}
+  {% endmacro %}
   <main id="main-content" class="workspace-container" tabindex="-1">
     <header class="workspace-header">
       <div>
@@ -66,6 +69,7 @@
                 {% if value %}<div><dt>{{ header }}</dt><dd>{{ value }}</dd></div>{% endif %}
               {% endfor %}
             </dl>
+            {{ pictures(source.images) }}
           </article>
           {% endfor %}
         </div>
@@ -88,9 +92,8 @@
             <div class="version-card selected current-content-card">
               <div class="version-heading">
                 <b>当前内容</b>
-                <span>{% if block.effective_version == 'generated' %}模型候选 · 用于导出{% elif block.effective_version == 'edited' %}人工编辑 · 用于导出{% else %}原文 · 用于导出（已规范化）{% endif %}</span>
               </div>
-              <p>{{ rendered_blocks[block.block_id] }}</p>
+              {% for paragraph in rendered_paragraphs[block.block_id] %}<p>{{ paragraph.text }}</p>{{ pictures(paragraph.images) }}{% endfor %}
             </div>
 
             {% if block.generated_text %}
@@ -107,7 +110,6 @@
             {% endif %}
             <section class="model-candidate" aria-label="模型候选与原文行内差异">
               <div class="version-heading"><b>模型生成结果</b><span>{% if block.effective_version == 'generated' %}当前已采用{% else %}未采用 · 不影响当前导出{% endif %}</span></div>
-              <p class="inline-diff-legend">红色删除线为原文删除，绿色高亮为模型新增；未标记文字保持不变。</p>
               <div class="inline-diff">{% for kind, text in inline_diff(block.original_text, block.generated_text) %}{% if kind == 'removed' %}<del>{{ text }}</del>{% elif kind == 'added' %}<ins>{{ text }}</ins>{% else %}<span>{{ text }}</span>{% endif %}{% endfor %}</div>
               <details class="candidate-full-text"><summary>查看完整模型文本</summary><p>{{ block.generated_text }}</p></details>
             </section>
@@ -206,7 +208,7 @@
             {% for item in directory_preview %}
               {% if item.block_id %}
               <div class="preview-entry" tabindex="0" data-preview-block="{{ item.block_id }}" aria-label="定位此段的来源和审核内容">
-                {% for paragraph in item.paragraphs %}<p style="text-indent: {{ body_indent(paragraph.kind) }}em">{{ paragraph.text }}</p>{% endfor %}
+                {% for paragraph in item.paragraphs %}<p style="text-indent: {{ body_indent(paragraph.kind) }}em">{{ paragraph.text }}</p>{{ pictures(paragraph.images) }}{% endfor %}
               </div>
               {% elif item.level == 1 %}<h3>{{ item.text }}</h3>
               {% elif item.level == 2 %}<h4>{{ item.text }}</h4>
@@ -221,7 +223,7 @@
                 {% for block in section_blocks %}
                 <div class="preview-entry" tabindex="0" data-preview-block="{{ block.block_id }}" aria-label="定位 {{ normalize_text(block.group_key) }} 的来源和审核内容">
                   <h4>{{ normalize_text(block.group_key) }}</h4>
-                  {% for paragraph in rendered_paragraphs[block.block_id] %}<p style="text-indent: {{ body_indent(paragraph.kind) }}em">{{ paragraph.text }}</p>{% endfor %}
+                  {% for paragraph in rendered_paragraphs[block.block_id] %}<p style="text-indent: {{ body_indent(paragraph.kind) }}em">{{ paragraph.text }}</p>{{ pictures(paragraph.images) }}{% endfor %}
                 </div>
                 {% endfor %}
               </section>
@@ -246,7 +248,7 @@
 
   <dialog id="edit-confirmation" class="edit-confirmation" aria-labelledby="edit-confirmation-title">
     <h2 id="edit-confirmation-title">确认本次人工修改</h2>
-    <p>以下对比仅显示当前内容与本次修改。确认后直接生效，不进行模型事实校验。</p>
+    <p>确认本次修改后直接生效，不再进行模型事实校验。</p>
     <div class="unified-diff edit-confirmation-diff" aria-label="本次人工修改前后对比"></div>
     <p class="edit-confirmation-error" role="alert" hidden></p>
     <div class="edit-confirmation-actions">
@@ -256,7 +258,7 @@
   </dialog>
 
   <div id="processing-overlay" class="processing-overlay" role="status" aria-live="polite" aria-hidden="true">
-    <div class="processing-panel"><span class="spinner" aria-hidden="true"></span><strong>正在更新当前文档</strong><p>保存后会生成新的文档版本，请稍候。</p><button type="button" class="secondary" id="cancel-workspace-task" hidden>取消任务</button></div>
+    <div class="processing-panel"><span class="spinner" aria-hidden="true"></span><strong>正在更新当前文档</strong><button type="button" class="secondary" id="cancel-workspace-task" hidden>取消任务</button></div>
   </div>
   <script src="{{ url_for('static', filename='task-client.js') }}"></script>
   <script src="{{ url_for('static', filename='workspace.js') }}"></script>

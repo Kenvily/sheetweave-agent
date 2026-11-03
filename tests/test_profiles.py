@@ -38,7 +38,7 @@ from sheetweave_agent.validator import ReportValidationError, validate_report
 from sheetweave_agent.web import create_app
 from sheetweave_agent.web_sessions import session_preset
 
-TEMPLATE = Path("data/研发三部周报模板-v2.docx")
+TEMPLATE = Path("tests/fixtures/templates/reference.docx")
 
 
 CSV = (
@@ -869,3 +869,148 @@ def test_cli_and_internal_service_have_no_implicit_rule(capsys, tmp_path):
     assert error.value.code == 2 and "--profile" in capsys.readouterr().err
     with pytest.raises(ValueError, match="新建并保存方案"):
         prepare_report(Path("not-read.csv"))
+
+
+@pytest.mark.parametrize("fallback_first", [False, True])
+def test_unseen_values_route_once_to_fallback_and_render(tmp_path, fallback_first):
+    from sheetweave_agent.adaptation import ensure_unmatched_section
+
+    source = tmp_path / "open.csv"
+    source.write_text(CSV)
+    rule = scheme(inspect_table(source))
+    rule["sections"][0]["match"] = {"project": ["合成平台"]}
+    ensure_unmatched_section(rule)
+    assert rule["sections"][-1]["source_fields"] == ["content", "result"]
+    # Future values were not present when this scheme was proposed.
+    source.write_text(
+        CSV + "新增平台,完成接口验证,新增成果,进行中\n新增平台,完成回归,验证通过,进行中\n"
+    )
+    if fallback_first:
+        rule["sections"].reverse()
+    preset = validate_rule_preset(rule)
+    prepared, _ = prepare_report(source, preset=preset)
+    known = [b for b in prepared.blocks if b.section_id == "work"]
+    fallback = [b for b in prepared.blocks if b.section_id == "unmatched"]
+    assert len(known) == 1
+    assert len(fallback) == 2
+    assert "新增成果" in fallback[-1].original_text
+    assert len(fallback[-1].source_ids) == 2
+    refs = [ref for b in prepared.blocks for ref in b.source_ids]
+    assert len(refs) == len(set(refs)) == 4
+    assert any("3 行" in w and "指定目录" in w for w in prepared.source.warnings)
+    plan = render_prepared_report(
+        prepared, preset, TEMPLATE, tmp_path / "open.docx", date(2026, 11, 3)
+    )
+    assert any(p.text.endswith("新增平台") for p in plan.paragraphs)
+    assert any("新增成果" in p.text for p in plan.paragraphs)
+
+
+def test_fallback_proposal_is_idempotent_and_unrestricted_routes_stay_open(tmp_path):
+    from sheetweave_agent.adaptation import ensure_unmatched_section
+
+    source = tmp_path / "open.csv"
+    source.write_text(CSV)
+    rule = scheme(inspect_table(source))
+    ensure_unmatched_section(rule)
+    assert len(rule["sections"]) == 1
+    rule["sections"][0]["match"] = {"project": ["合成平台"]}
+    ensure_unmatched_section(rule)
+    ensure_unmatched_section(rule)
+    assert len(rule["sections"]) == 2
+
+
+@pytest.mark.parametrize("invalid", ["boolean", "filters", "duplicate"])
+def test_invalid_fallback_policies_are_rejected(tmp_path, invalid):
+    from copy import deepcopy
+
+    from sheetweave_agent.adaptation import ensure_unmatched_section
+
+    source = tmp_path / "open.csv"
+    source.write_text(CSV)
+    rule = scheme(inspect_table(source))
+    rule["sections"][0]["match"] = {"project": ["合成平台"]}
+    ensure_unmatched_section(rule)
+    fallback = rule["sections"][-1]
+    if invalid == "boolean":
+        fallback["unmatched_only"] = "true"
+    elif invalid == "filters":
+        fallback["match"] = {"project": ["新增平台"]}
+    else:
+        other = deepcopy(fallback)
+        other["id"] = "second_fallback"
+        rule["sections"].append(other)
+    with pytest.raises(ValueError):
+        validate_rule_preset(rule)
+
+
+def test_existing_fixed_directory_accepts_unassigned_rows_without_stealing_other_routes(tmp_path):
+    from copy import deepcopy
+
+    source = tmp_path / "open.csv"
+    source.write_text(CSV + "新增平台,完成接口验证,新成果,进行中\n")
+    rule = scheme(inspect_table(source))
+    target = rule["sections"][0]
+    target.update(match={"project": ["合成平台"]}, group_by="section", accept_unmatched=True)
+    other = deepcopy(target)
+    other.update(
+        id="other",
+        title="模型评估",
+        heading_path=["研发工作", "模型", "模型评估"],
+        match={"project": ["合成模型"]},
+        accept_unmatched=False,
+    )
+    rule["sections"].append(other)
+    preset = validate_rule_preset(rule)
+    prepared, _ = prepare_report(source, preset=preset)
+    blocks = {block.section_id: block for block in prepared.blocks}
+    assert blocks["work"].source_ids == ("f1:CSV:2", "f1:CSV:4")
+    assert blocks["other"].source_ids == ("f1:CSV:3",)
+    assert "新成果" in blocks["work"].original_text
+    assert len(prepared.blocks) == 2
+    assert any("1 行" in warning and "新增项目" in warning for warning in prepared.source.warnings)
+    assert preset.sections[0].match == {"project": ["合成平台"]}
+    plan = render_prepared_report(
+        prepared, preset, TEMPLATE, tmp_path / "fixed.docx", date(2026, 11, 3)
+    )
+    headings = [p.text for p in plan.paragraphs if p.kind.value.startswith("heading")]
+    assert not any("待归类" in text or "新增平台" in text for text in headings)
+    assert any("接口验证" in p.text for p in plan.paragraphs)
+
+
+@pytest.mark.parametrize("invalid", ["duplicate", "dynamic", "boolean", "both"])
+def test_new_project_destination_must_be_unique_and_fixed(tmp_path, invalid):
+    from copy import deepcopy
+
+    source = tmp_path / "open.csv"
+    source.write_text(CSV)
+    rule = scheme(inspect_table(source))
+    section = rule["sections"][0]
+    section["accept_unmatched"] = True
+    if invalid == "duplicate":
+        other = deepcopy(section)
+        other["id"] = "other"
+        rule["sections"].append(other)
+    elif invalid == "dynamic":
+        section["heading_fields"] = ["", "project", ""]
+    elif invalid == "boolean":
+        section["accept_unmatched"] = "yes"
+    else:
+        section["unmatched_only"] = True
+    with pytest.raises(ValueError):
+        validate_rule_preset(rule)
+
+
+def test_fixed_destination_survives_profile_roundtrip_and_no_extra_fallback(tmp_path):
+    from sheetweave_agent.adaptation import ensure_unmatched_section
+
+    source = tmp_path / "open.csv"
+    source.write_text(CSV)
+    rule = scheme(inspect_table(source))
+    rule["sections"][0].update(match={"project": ["合成平台"]}, accept_unmatched=True)
+    ensure_unmatched_section(rule)
+    assert len(rule["sections"]) == 1
+    store = ProfileStore(tmp_path / "saved")
+    profile_id, version = store.save(rule, TEMPLATE)
+    saved, _, _ = store.load(profile_id, version)
+    assert saved.sections[0].accept_unmatched
+    assert saved.sections[0].match == {"project": ["合成平台"]}

@@ -7,7 +7,7 @@ from dataclasses import replace
 from datetime import date
 from pathlib import Path
 
-from .content_builder import build_content_blocks
+from .content_builder import build_content_blocks, unmatched_source_ids
 from .docx_renderer import render_docx
 from .input_parser import parse_input
 from .llm import ContentMode, LLMService, load_llm_config, parse_content_mode
@@ -44,6 +44,24 @@ def prepare_report(
     blocks = build_content_blocks(source, preset)
     if not blocks:
         raise ValueError("当前规则没有匹配到可用内容。")
+    fallback_ids = {
+        section.id
+        for section in preset.sections
+        if section.unmatched_only or section.accept_unmatched
+    }
+    fallback_rows = {
+        source_id
+        for block in blocks
+        if block.section_id in fallback_ids
+        for source_id in block.source_ids
+    }
+    fallback_rows &= unmatched_source_ids(source, preset)
+    if fallback_rows:
+        source = replace(
+            source,
+            warnings=source.warnings
+            + (f"{len(fallback_rows)} 行未匹配既有规则，已纳入指定目录，请核对新增项目后导出。",),
+        )
     return PreparedReport(preset.id, source, blocks), preset
 
 
