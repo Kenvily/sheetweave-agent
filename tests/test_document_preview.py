@@ -17,7 +17,7 @@ from sheetweave_agent.web_sessions import SessionConflictError, SnapshotStore
 pytestmark = pytest.mark.usefixtures("saved_generation_profiles")
 
 ROOT = Path(__file__).resolve().parents[1]
-TEMPLATE = ROOT / "data/研发三部周报模板-v2.docx"
+TEMPLATE = ROOT / "tests/fixtures/templates/reference.docx"
 SIMPLE_CSV = "项目,本周工作\n项目甲,完成模型验证，AUC 0.81\n".encode()
 
 

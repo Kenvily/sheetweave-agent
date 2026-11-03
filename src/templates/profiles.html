@@ -19,7 +19,7 @@
 
 <label class="field"><span>固定标题或目录要求（可选）</span><textarea name="desired_outline" rows="5" maxlength="12000" placeholder="例如：&#10;9. 大模型产品研发&#10;9.1. 百擎平台&#10;9.1.1. 百擎产品及研发推进&#10;9.2. LDM&#10;9.2.1. 模型研发"></textarea></label>
 <label class="field"><span>补充要求（可选）</span><textarea name="requirements" rows="3" maxlength="16000" placeholder="例如：把工作进展与成果合并整理；只保留进行中的事项；正文首行缩进两字符。"></textarea></label>
-<label class="profile-check"><input type="checkbox" name="allow_analysis" value="yes" required><span>确认样例已脱敏，允许已配置模型读取表头、部分样例内容、参考文档片段和格式要求。</span></label>
+<label class="profile-check"><input type="checkbox" name="allow_analysis" value="yes" required><span>确认材料已脱敏，允许已配置模型读取样例、参考文档及格式要求。</span></label>
 <button type="submit" id="analyze-profile">自动识别方案</button>
 </form></section></div>
 <script src="{{ url_for('static', filename='profile-upload.js') }}" defer></script>
@@ -28,24 +28,23 @@
 {% if not analysis.document.supported %}<p class="alert" role="alert">当前模板不支持：{{ analysis.document.unsupported|join('、') }}。请更换参考文档。</p>{% endif %}
 <p id="analysis-status" role="status" aria-live="polite">{% if analysis.ai_task and not analysis.ai_applied %}正在识别表格内容、报告目录和文档格式…{% endif %}</p>
 {% if analysis.ai_error %}<p class="alert" role="alert">{{ analysis.ai_error }} 可以调整下方方案后试生成，或返回重新识别。</p>{% endif %}
-{% if analysis.summary %}<p>{{ analysis.summary }}</p>{% endif %}
 {% if analysis.questions %}<ul class="profile-questions">{% for q in analysis.questions %}<li>{{ q }}</li>{% endfor %}</ul>{% endif %}
 <form id="profile-editor" data-token="{{ token }}"{% if analysis.ai_task and not analysis.ai_applied %} hidden{% endif %}>
-<section class="profile-panel"><h2>1. 数据如何组成报告</h2>
+<section class="profile-panel"><h2><span class="step-number">1</span>数据如何组成报告</h2>
 <label class="field"><span>方案名称</span><input id="profile-name" value="{{ analysis.rule.name }}" required maxlength="100"></label>
 <div class="profile-table"><table><thead><tr><th>Excel 字段</th><th>字段含义</th></tr></thead><tbody id="mapping-rows"></tbody></table></div>
-<h3>标题与正文组织</h3><div id="outline-groups"></div><button type="button" id="add-group" class="secondary">添加组织规则</button>
+<h3>标题与正文组织</h3><label class="field new-project-routing"><span>接纳新增项目</span><select id="new-project-target" aria-label="新增项目归入目录"></select></label><div id="outline-groups"></div><div class="outline-add-actions"><button type="button" id="add-group" class="secondary">添加组织规则</button></div>
 <div id="status-policy" hidden><h3>保留的事项状态</h3><div id="status-options"></div></div></section>
-<section class="profile-panel"><h2>2. 文档格式</h2>
+<section class="profile-panel"><h2><span class="step-number">2</span>文档格式</h2>
 <div class="profile-grid"><label class="field"><span>报告标题</span><input id="report-title" value="{{ analysis.rule.document.report_title }}" required></label><label class="field"><span>起始章节</span><input id="heading-start" type="number" min="1" max="999" value="{{ analysis.rule.document.heading_start_default }}" required></label></div>
 <div class="profile-table"><table><thead><tr><th>段落</th><th>字体</th><th>字号</th><th>加粗</th><th>行距</th></tr></thead><tbody id="style-rows"></tbody></table></div>
 <h3>编号层级</h3><div class="numbering-grid" id="numbering-controls"></div></section>
-<section class="profile-panel"><h2>3. 验证并保存方案</h2>
+<section class="profile-panel"><h2><span class="step-number">3</span>验证并保存方案</h2>
 <label class="field"><span>报告日期</span><input id="trial-date" type="date" required></label>
-<label class="profile-check"><input id="confirm-profile" type="checkbox"><span>已核对字段、标题组织和格式规则。</span></label>
-<div class="profile-actions"><button type="submit"{% if not analysis.document.supported %} disabled{% endif %}>验证样例</button><button type="button" id="save-profile" disabled>保存方案</button></div>
+<label class="profile-check"><input id="confirm-profile" type="checkbox"><span>已核对字段、目录和格式。</span></label>
+<div class="profile-actions"><button type="submit" class="secondary"{% if not analysis.document.supported %} disabled{% endif %}>验证样例</button><button type="button" id="save-profile" disabled>保存方案</button></div>
 <p id="trial-status" role="status" aria-live="polite"></p><p id="save-status" role="status" aria-live="polite"></p>
-<div id="trial-result" hidden><p><a id="trial-download">下载 DOCX 核对格式</a></p><pre id="trial-text"></pre></div>
+<div id="trial-result" hidden><p><a id="trial-download">下载验证文档</a></p><pre id="trial-text"></pre></div>
 </section></form>
 <script id="adaptation-data" type="application/json">{{ analysis|tojson }}</script><script id="numbering-options" type="application/json">{{ numbering_options|tojson }}</script><script src="{{ url_for('static', filename='profiles.js') }}" defer></script>
 {% endif %}

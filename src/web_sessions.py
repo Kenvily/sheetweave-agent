@@ -17,7 +17,7 @@ from datetime import date
 from pathlib import Path
 from typing import Any
 
-from .models import ContentBlock, ParsedInput, PreparedReport, SourceFile, SourceRecord
+from .models import ContentBlock, ParsedInput, PreparedReport, SourceFile, SourceImage, SourceRecord
 
 TOKEN_PATTERN = re.compile(r"^[A-Za-z0-9_-]{32,128}$")
 DEFAULT_SNAPSHOT_TTL_SECONDS = 2 * 60 * 60
@@ -427,6 +427,7 @@ def _prepared_from_dict(payload: dict[str, Any]) -> PreparedReport:
                 **{
                     **item,
                     "raw_values": tuple(item.get("raw_values", ())),
+                    "images": tuple(SourceImage(**image) for image in item.get("images", ())),
                 }
             )
             for item in source_data["sources"]
@@ -434,7 +435,13 @@ def _prepared_from_dict(payload: dict[str, Any]) -> PreparedReport:
         field_mapping=dict(source_data["field_mapping"]),
         headers=tuple(source_data["headers"]),
         excluded_sources=tuple(
-            SourceRecord(**{**item, "raw_values": tuple(item.get("raw_values", ()))})
+            SourceRecord(
+                **{
+                    **item,
+                    "raw_values": tuple(item.get("raw_values", ())),
+                    "images": tuple(SourceImage(**image) for image in item.get("images", ())),
+                }
+            )
             for item in source_data.get("excluded_sources", ())
         ),
         warnings=tuple(source_data.get("warnings", ())),

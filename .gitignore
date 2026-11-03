@@ -1,6 +1,7 @@
 # Local agent skills and editor settings
 /.agents/
 /.vscode/
+/.codex/
 
 # Python caches and build artifacts
 __pycache__/
@@ -22,3 +23,6 @@ var/
 .env
 .env.*
 !.env.example
+
+# Local business data and document assets
+/data/

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import base64
 import difflib
 import io
 import os
@@ -67,7 +68,7 @@ from .web_profiles import profiles_ui
 from .web_sessions import ReportSession, SessionConflictError, SnapshotStore, session_preset
 from .web_stream import GenerationCancelled, stream_events
 
-DEFAULT_TEMPLATE = Path("data/研发三部周报模板-v2.docx")
+DEFAULT_TEMPLATE = Path("data/周报/研发三部/模板/研发三部周报模板_测试.docx")
 DOCX_MIME_TYPE = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
 MAX_UPLOAD_SIZE = 16 * 1024 * 1024
 SUPPORTED_INPUT_SUFFIXES = {".csv", ".xlsx"}
@@ -374,6 +375,27 @@ def create_app(
             ),
             status,
         )
+
+    @app.get("/workspace/<token>/images/<image_id>")
+    def source_picture(token, image_id):
+        try:
+            session = app.config["SNAPSHOT_STORE"].load_session(token)
+            image = next(
+                image
+                for row in session.prepared.source.sources
+                for image in row.images
+                if image.image_id == image_id
+            )
+            response = send_file(
+                io.BytesIO(base64.b64decode(image.data, validate=True)),
+                mimetype=image.mime_type,
+                max_age=0,
+            )
+            response.headers["Cache-Control"] = "private, no-store"
+            response.headers["X-Content-Type-Options"] = "nosniff"
+            return response
+        except (ValueError, StopIteration, OSError):
+            return "图片不存在或审核会话已过期。", 404
 
     def show_workspace(
         session: ReportSession,

@@ -134,7 +134,7 @@ def test_model_restructures_merged_rows_with_context_and_same_docx_html_plan(tmp
     units = client.payload["blocks"][0]["source_units"]
     assert [unit["context"]["detail"] for unit in units] == ["模型实验", "培训材料"]
     assert "不要求保持段落数量" in client.payload["mode_contract"]["organization"]
-    template = Path("data/研发三部周报模板-v2.docx")
+    template = Path("tests/fixtures/templates/reference.docx")
     plan = render_prepared_report(result, preset, template, tmp_path / "structured.docx", DAY)
     paragraphs = [p for p in plan.paragraphs if p.kind.value.startswith("body")]
     assert len(paragraphs) == 2 and all(p.kind is ParagraphKind.BODY_1 for p in paragraphs)

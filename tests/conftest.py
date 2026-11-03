@@ -29,7 +29,7 @@ def saved_generation_profiles(isolate_default_web_state):
     from sheetweave_agent.rules import load_rule_preset, preset_payload
 
     root = Path(__file__).resolve().parents[1]
-    template = root / "data/研发三部周报模板-v2.docx"
+    template = root / "tests/fixtures/templates/reference.docx"
     store = ProfileStore.from_environment()
     general = preset_payload(load_rule_preset("general"))
     store.save(general, template, profile_id="p_general")

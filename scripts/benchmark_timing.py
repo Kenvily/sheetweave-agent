@@ -145,7 +145,7 @@ def main() -> int:
                         render_prepared_report(
                             prepared,
                             preset,
-                            ROOT / "data/研发三部周报模板-v2.docx",
+                            ROOT / "data/周报/研发三部/模板/研发三部周报模板_测试.docx",
                             work / f"report-{index}.docx",
                             date(2026, 10, 12),
                         )
