@@ -22,3 +22,6 @@ var/
 .env
 .env.*
 !.env.example
+
+# Local business data and document assets
+/data/
