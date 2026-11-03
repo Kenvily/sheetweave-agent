@@ -37,11 +37,14 @@ def build_content_blocks(source: ParsedInput, preset: RulePreset) -> tuple[Conte
     """Apply section/group rules while preserving complete source relationships."""
     blocks: list[ContentBlock] = []
     covered = set()
-    for section in preset.sections:
+    # Ordinary routes always run first, regardless of editor ordering.
+    for section in sorted(preset.sections, key=lambda item: item.unmatched_only):
         grouped: OrderedDict[tuple[str, bool, tuple[str, ...]], list[tuple[str, str]]] = (
             OrderedDict()
         )
         for record in source.sources:
+            if section.unmatched_only and record.source_id in covered:
+                continue
             if section.match and not all(
                 record.fields.get(key, "").strip() in values
                 for key, values in section.match.items()

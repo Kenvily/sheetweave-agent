@@ -1,261 +1,214 @@
-# SheetWeaveAgent 项目与运维说明
+<h1><img src="../src/static/sheetweave-mark.svg" alt="" width="40" height="40" align="absmiddle"> SheetWeaveAgent 使用指南</h1>
 
-## 产品定位
+从首次启动到日常交付，按这份指南完成配置与使用。
 
-将结构化业务数据，按照企业模板和内容规则，生成可追溯、可审核的正式文档。输入为 Excel / CSV，输出为符合已确认方案的 DOCX；模型负责允许范围内的语义整理，规则与 Harness 负责路由、约束、校验和回退，人工负责最终内容确认。
+**首次使用：安装启动 → 配置模型 → 创建方案 → 生成与审核。** 已有方案时，直接上传本期数据即可开始。
 
-方案适配定义字段、目录、正文来源、筛选和格式，新建文档负责使用方案处理本次数据，审核工作区负责核对来源、候选及最终内容。项目进展、研发与评估记录、交付台账均可作为适配方向；周报是已有场景，周期矩阵只是输入布局之一，不是产品的唯一用途。现有能力不等于自动完成经营分析、专业合规判断或任意复杂模板排版。
+[产品介绍](../README.md) · [架构与设计](project-design.md)
 
-已有方案名称和报告标题属于用户内容，不因产品重新定位自动改名；历史文件名、`weekly_matrix` 布局、`WEEKLY_REPORT_*` 配置键和存储路径继续兼容。
+## 1. 安装与启动
 
-## 架构与目录
-
-```text
-浏览器 → Flask / Gunicorn → SQLite 任务队列 → 独立 Worker
-   ↑             ↑              ↑                  |
-   └─ 状态短轮询 ┘              └─ 更新进度/结果 ──┘
-
-Worker：CSV/XLSX → 字段映射/方案 → IR → 可选 LLM
-                                     ↓
-                              事实校验与失败回退
-                                     ↓
-                              规范化 → DOCX 格式校验
-                                     ↓
-浏览器 ← 审核/编辑/下载 ← 带有效期的文件快照
-```
-
-方案适配负责识别并确认字段、目录、正文来源和格式；实际报告生成复用已保存方案。多行内容可按最终标题合并成一个审核区块。规则与 Harness 控制结构、事实、格式及失败回退；LLM 在允许的正文范围内整理语义，不能替代格式验收。
-
-| 位置 | 职责 |
-|---|---|
-| `src/` | 映射为 Python 包 `sheetweave_agent`，不使用 `src.sheetweave_agent` |
-| `input_parser.py`、`csv_parser.py` | CSV/XLSX、表头、工作表/周次、字段映射及来源位置 |
-| `models.py`、`content_builder.py`、`planner.py` | IR、分组、段落层级、正文与目录规划 |
-| `normalizer.py`、`numbering.py` | 确定性术语、称呼、日期、标点和编号；术语表为 `TERM_REPLACEMENTS` |
-| `adaptation.py`、`web_profiles.py`、`profiles.py` | 辅助识别、用户确认、试生成、永久方案与不可变版本 |
-| `llm/`、`service.py` | 服务端模型配置、批次处理、事实校验与生成编排 |
-| `docx_renderer.py`、`word_lists.py`、`document_style.py`、`validator.py` | 标准库 ZIP/XML 渲染、Word 样式/列表及格式校验 |
-| `web.py`、`web_sessions.py`、`pdf_preview.py` | Web、带有效期的审核快照、revision 和 PDF 转换 |
-| `task_queue.py`、`task_worker.py`、`server.py` | 持久队列、独立执行与单终端进程管理 |
-| `stats.py`、`timing.py` | 匿名聚合统计和阶段计时 |
-| `templates/`、`static/` | 页面、样式、SVG 品牌资源、短轮询和三栏审核交互 |
-| `src/rules/general.json` | 内部适配基线，不是公开生成入口或默认业务规则 |
-| `tests/` | 核心回归；`fixtures/rules/rd3.json` 仅供周次矩阵等测试使用 |
-| `scripts/` | 方案管理和合成数据测速 |
-| `data/<文档类别>/<部门>/` | 按周报、项目交付、模型评估和问题整改分类，包含 `输入/`、`方案/`、`输出/`，参考格式另放 `模板/` |
-| `var/verification/` | 数据来源、实际重复生成验证及任务记录；测试生成计入实际成功次数，不伪造访客或回填历史日期 |
-| `tests/fixtures/templates/`、`src/examples/` | 固定格式回归模板与网页下载示例，独立于业务参考资料 |
-| `var/`、`outputs/` | 私有运行数据及按需生成的报告，不提交 Git |
-
-原文保留不调用模型，保留事项顺序与显式层级；规范润色允许重分条、重组结构和可选补充要求。日期、版本、指标、明确数量和状态冲突会回退，术语及无单位数字的未配对差异作为提示保留。人工编辑以当前内容为基础，确认 Diff 后生效。来源、模型候选和当前版本分别保存，可追溯对应输入行。
-
-DOCX 使用原生三级正文列表及关联样式，每个目录隔离编号定义、实例和样式，支持 Word 中续号和级别调整。默认三级正文比二级多缩进两字符。标题具有大纲语义；HTML 是语义预览，最终分页以 Word/PDF 为准。复杂表格、文本框等模板不保证兼容。
-
-## 方案约束与每次生成范围
-
-方案定义字段语义、输入布局、目录和文档格式；工作表及报告周次由每次上传的文件决定。已保存方案无需为工作表改名重新保存：`sheet_default` 仅作为优先选择，旧名称不存在时回退到当前文件第一个工作表，用户可在首页下拉框手动切换；显式选择了不存在的工作表仍会报错，避免静默读错页。说明页或空工作表不会阻断工作表列表加载，生成时仍拒绝空数据。
-
-周次矩阵从当前工作表第二行识别“第N周”，可手选，未选择时采用最新有有效进展的周次。切换文件/方案会重新识别默认周次；切换工作表时只保留该表仍存在的周次。月份变化和已识别的周次列增减不要求重建方案；单行明细表（`records`）不会凭空增加周次选择器。
-
-| 已保存约束 | 当前行为 |
-|---|---|
-| 输入布局、表头行数 | 仍按方案解析，不自动猜测另一种布局；实际结构变化需适配方案 |
-| `expected_headers` | 有保存时，普通明细表要求完整规范化表头及顺序一致，包含未写入正文的列；空白列转为“未命名列N”、重名列加后缀。周次矩阵允许识别到的周期区域中月份、周次及空白周期列变化，固定字段仍检查 |
-| 必填字段与映射 | 必填字段必须能通过别名或显式映射定位，工作表可选不代表任何表都适用；字段名/固定列结构变化仍可能要求重新适配 |
-| 正文来源、目录、分组及行筛选 | 按保存规则执行；指定项目或其他字段值的筛选不会自动放开，新项目可能被排除或需要新增目录规则 |
-| 状态策略 | 已知但未保留的状态会被排除；未知/空状态保留并提示，历史完成标记依方案执行 |
-| 文档格式 | 标题组织、样式和编号仍依方案及格式校验执行，不受工作表/周次选择影响 |
-
-这些检查保护字段和内容归属，不要求 Excel 文件名、字体、列宽或正文值与样例一致。若普通明细表只改了一个未使用列名，也可能触发完整表头检查；这是当前保留的兼容性边界，不能把工作表/周次放宽理解为取消全部结构校验。
-
-## 服务启动
-
-推荐使用 [README](../README.md) 的统一入口：默认 2 个 gthread Web 进程、每进程 2 个请求线程，另有独立后台任务进程。日志输出当前终端；未安装开机自启或外部进程守护。端口被占用时启动会失败。
-
-Web 进程数统一在 `gunicorn.conf.py` 的 `workers` 中配置，当前为 `2`。统一入口默认沿用该值，只有显式使用 `python -m sheetweave_agent.server --workers N` 才通过命令行覆盖；直接启动 Gunicorn 时的 `--workers N` 也会覆盖文件值。它控制 Web 进程，不改变后台 `TASK_MAX_CONCURRENCY`。
-
-需要分开管理时，**两个终端必须加载相同配置**：
+需要 Python 3.11+，在项目根目录运行。已有环境可直接使用；没有环境时可自行创建独立 Python 环境，不覆盖其他项目。
 
 ```bash
 conda activate py31115
-cd ~/SheetWeaveAgent
-set -a; source .env; set +a            # 仅加载自己信任的本地配置
-# 终端一：
-gunicorn --config gunicorn.conf.py --worker-class gthread --threads 2 \
-  --bind 127.0.0.1:18989 'sheetweave_agent.web:create_app()'
-# 终端二：执行相同环境配置后
+python -m pip install -r requirements.txt
+test -f .env || cp .env.example .env
+chmod 600 .env
+python -m sheetweave_agent.server --host 127.0.0.1 --port 18989
+```
+
+统一入口读取项目 `.env`，启动 Web 和独立任务 Worker；访问 `http://127.0.0.1:18989`。Ctrl+C 关闭两者。迁移项目目录后重新安装 `python -m pip install -e .`，不要直接执行 `python src/web.py`。
+
+远程服务器可通过 SSH 转发访问：
+
+```bash
+ssh -N -L 18989:127.0.0.1:18989 用户@服务器
+```
+
+如需按现有内网策略直连，将启动参数改为 `--host 0.0.0.0`。程序不会配置防火墙、TLS 或访问认证；当前方案库是服务器共享的，不提供账户隔离。
+
+已有 systemd 服务可执行 `sudo systemctl restart sheetweaveagent.service`。只修改 `.env` 或 Gunicorn 配置不需要 `daemon-reload`；修改 unit/override 后才需要。
+
+需要分开启动时，两个终端使用相同环境、配置和数据路径：
+
+```bash
+# 每个终端先加载自己信任的配置文件
+conda activate py31115
+set -a
+source .env
+set +a
+
+# 终端一
+gunicorn --config gunicorn.conf.py --bind 127.0.0.1:18989 \
+  'sheetweave_agent.web:create_app()'
+# 终端二
 python -m sheetweave_agent.task_worker
 ```
 
-同机浏览器访问 `http://127.0.0.1:18989`。远程服务器可用 `ssh -N -L 18989:127.0.0.1:18989 用户@服务器` 转发；局域网直连需绑定 `0.0.0.0` 并按现有网络规则放行。程序不修改代理、防火墙或系统源。迁移目录后重新 `python -m pip install -e .`，旧包升级可先卸载 `weekly-report-agent`；新包/命令统一使用 SheetWeave 名称。
+## 2. 配置模型与生成时限
 
-## 配置
-
-统一入口默认读取项目 `.env`，也支持 `--env-file /绝对路径/配置.env` 或 `--no-env`。修改后重启 Web 和 Worker。下表默认值以未设置环境变量时的代码为准，`.env.example` 是可调整的示例；除明确说明外，数值配置不要填空字符串。
-
-### 模型与 PDF
-
-| 变量 | 默认值 / 用途 |
-|---|---|
-| `LLM_API_KEY` | 空；仅保存在服务端，原文模式不需要 |
-| `LLM_API_BASE` | `https://api.deepseek.com`；OpenAI-compatible Base，不含 `/chat/completions` |
-| `LLM_MODEL` | `deepseek-chat`；当前默认模型 |
-| `LLM_ALLOWED_MODELS` | `deepseek-chat,deepseek-reasoner`；默认模型必须在列表内 |
-| `LLM_TIMEOUT` | `60` 秒，连接/单次阻塞读取等待阈值；不是整个任务的总时限 |
-| `LLM_MAX_RETRIES` | `1`，限流、服务端错误及部分连接错误的最多重试次数；超时与解析失败不自动重试 |
-| `LLM_MAX_BATCH_CHARS` | `12000`，首次规范润色批次的完整消息字符预算，含固定 Prompt、来源和事实上下文；单个审核区块不可拆分，超限会记录 `oversized=true` |
-| `LLM_MAX_CONCURRENCY` | `2`，单份报告的并行批次数，范围 1～4 |
-| `LLM_AUTO_CORRECT` | `false`；开启后可能为冲突追加修正调用 |
-| `LLM_REASONING_EFFORT` | 空，不发送；仅在所选服务/模型支持时配置 |
-| `LIBREOFFICE_PATH` | 空，自动检测 `soffice` / `libreoffice`；仅 PDF 需要 |
-| `PDF_PREVIEW_TIMEOUT` | `45` 秒，PDF 转换超时 |
-
-通用 `LLM_*` 未设置时兼容旧 `DEEPSEEK_*`；显式空值不会回退旧值。Key 不会显示在网页中。不要未经授权发送公司内容；方案识别需确认脱敏和外发权限，CLI 模型模式需 `--allow-external`。
-
-### 模型等待与 Web Worker 超时
-
-**部署时分别检查 `.env` 的 `LLM_TIMEOUT` 与 `gunicorn.conf.py` 的超时设置，它们作用于不同进程和阶段。** 公司内部推理模型可能在开始返回正文前思考较久；真实内容的耗时不能用一个简单 JSON 测试替代。若已确认模型仍在正常推理，可按实际耗时留出余量，例如：
+在 `.env` 中指定获得授权的 OpenAI-compatible Chat Completions 服务：
 
 ```dotenv
-# 示例：允许较慢的内部模型等待 5 分钟；不是默认值或通用推荐值。
-LLM_TIMEOUT=300
+LLM_API_BASE=https://模型服务地址/v1
+LLM_API_KEY=填写本地密钥
+LLM_MODEL=服务提供的模型名
+LLM_ALLOWED_MODELS=服务提供的模型名
 ```
 
-| 配置位置 | 当前默认 / 设置值 | 作用与调整依据 |
+Base 不含 `/chat/completions`。模型名必须在允许列表中；示例文件中的 DeepSeek 值不是公司 API 的通用默认值。密钥只保留在本地，分享诊断结果前不要附上 `.env`。原文生成不调用模型；首次自动适配和规范润色需要模型配置与数据发送授权。
+
+以下为**未设置环境变量时的代码默认值**，不等于 `.env.example` 中的示例选择。通用 `LLM_*` 未设置时兼容旧的 `DEEPSEEK_*` 对应配置；显式空值不会回退旧值。
+
+| 参数 | 默认值 | 使用说明 |
 |---|---|---|
-| `.env`：`LLM_TIMEOUT` | 代码默认 `60` 秒 | 上游 HTTP 连接和阻塞读取的等待阈值。非流式可能等推理及正文生成完成才返回响应头；根据真实请求耗时和网关能力设置余量。多个批次、重试或修正可能使整份任务耗时更长；持续有数据的流式请求也可能超过该数值。 |
-| `gunicorn.conf.py`：`timeout` | 文件当前为 `180` 秒 | Web Worker 长时间未向主进程报告存活时被杀死并重启。当前 `gthread` 有独立心跳，不是单个 HTTP 请求的固定时长上限。若改用 `sync` Worker，长同步请求可能触发该限制，应为完整同步处理时间留出余量。 |
-| `gunicorn.conf.py`：`graceful_timeout` | 文件当前为 `180` 秒 | Gunicorn 优雅关闭/重启时等待 Web 请求完成的时间，不是正常运行期间的模型等待上限；也不管理独立任务 Worker。 |
-| `src/server.py`：统一入口关闭等待 | 当前 `190` 秒 | 收到停止信号后同时通知 Web 和任务 Worker，超过该时间仍未退出会被强制终止。它不随以上两项配置自动增加，目前也没有对应环境变量或 CLI 参数。 |
+| `LLM_API_BASE` | `https://api.deepseek.com` | 替换为实际服务 Base |
+| `LLM_MODEL` | `deepseek-chat` | 改用内部服务时必须显式指定 |
+| `LLM_ALLOWED_MODELS` | `deepseek-chat,deepseek-reasoner` | 网页可选模型，须含默认模型 |
+| `LLM_TIMEOUT` | `60` 秒 | 连接/阻塞读取等待阈值，不是整份任务的总时限 |
+| `LLM_MAX_RETRIES` | `1` | 可重试 HTTP/部分连接错误的额外次数；超时、正文中断、解析失败不自动重发 |
+| `LLM_MAX_BATCH_CHARS` | `12000` | 首次润色批次的完整消息字符预算，不是 token 限额；单个审核区块不会强制拆开 |
+| `LLM_MAX_CONCURRENCY` | `2` | 每份报告并行批次数，范围 1～4 |
+| `LLM_AUTO_CORRECT` | `false` | 开启后可能为事实冲突追加修正调用 |
+| `LLM_REASONING_EFFORT` | 空 | 空值不发送，仅按服务/模型实际支持设置 |
 
-当前队列路径是浏览器提交任务后短轮询，LLM 请求由独立任务 Worker 执行。仅提高 Gunicorn `timeout` **不能修复后台 LLM 超时**；只提高 `LLM_TIMEOUT` 也不能防止 Web Worker 失去心跳、上游网关主动断开连接或部署平台强制停止服务。对于此路径，`LLM_TIMEOUT=300` 与 Gunicorn `timeout=180` 并不矛盾，无需强制将后者调得更大。
+### 慢推理模型：分别检查两类超时
 
-若使用 `/preview`、`/generate` 等同步入口，应同时核对 Web Worker 类型、完整请求耗时及实际反向代理/客户端的超时；`gthread` 的长请求仍会占用请求线程。不要把 Worker 心跳超时当成接口调用的硬截止时间，也不要仅为等待模型而关闭所有超时保护。
+内部模型可能短请求很快、真实材料推理超过一分钟。已确认模型正常推理时，可按实测耗时留余量，例如 `LLM_TIMEOUT=300`；这只是配置示例，不保证所有模型在五分钟内完成。修改后重启 Web **和后台 Worker**。
 
-修改 `.env` 后重启 **Web 与独立任务 Worker**；修改 `gunicorn.conf.py` 后重启 Gunicorn。统一入口会加载该配置文件，Gunicorn 命令行参数可覆盖文件值，分开启动时应显式使用 `--config gunicorn.conf.py`。沿用现有 systemd 服务的部署可执行 `sudo systemctl restart sheetweaveagent.service`，单纯修改上述两份文件不需要 `daemon-reload`；仅修改 unit/override 时才需要重新加载 systemd 配置。
+| 设置 | 当前值 | 调整时注意 |
+|---|---|---|
+| `.env`：`LLM_TIMEOUT` | 默认 60 秒 | 控制模型连接和读取等待；批次执行时间还会累加 |
+| `gunicorn.conf.py`：`timeout` | 180 秒 | Web Worker 心跳超时；当前 `gthread` 下不等于单个请求时限，也不管理独立后台模型调用 |
+| `gunicorn.conf.py`：`graceful_timeout` | 180 秒 | Web Worker 优雅关闭等待，不是模型生成时限 |
+| 统一入口关闭等待 | 190 秒 | 当前固定值，无对应 CLI 参数；超时仍未退出会被强制终止 |
 
-**提高模型等待时间后，还要考虑停止/重启时的任务。** 例如模型允许等待 300 秒，但统一入口最多等待关闭 190 秒，运行中的任务仍可能在重启时被打断；systemd 实际设置的 `TimeoutStopSec` 也可能更早结束服务。尽量在无运行任务时重启，如需保证更长的优雅关闭，应另行核对并调整部署关闭策略，不能只修改 Gunicorn `graceful_timeout`。队列租约负责识别中断，不会无条件重放可能计费的调用。
+后台模型等待 300 秒与 Gunicorn `timeout=180` 可以同时成立，无需机械地把后者改得更大。但运行任务超过 190 秒时，重启仍可能将其打断；既有 systemd 的 `TimeoutStopSec` 也可能更短。尽量在任务结束后重启，长期运行场景另行核对关闭策略。
 
-诊断工具 `scripts/diagnose_llm.py` 有独立的 `--timeout`、`--deadline` 和 `--total-timeout`：默认分别为 15、20、60 秒，socket 阈值还会取其与 Worker `LLM_TIMEOUT` 的较小值。生产环境调大 `LLM_TIMEOUT` 后，诊断脚本仍可能提前截止，应显式调整这些参数并区别 `wall_deadline` 与 `socket_timeout`。当前脚本每个时间参数上限为 180 秒，不能直接照抄大于 180 秒的生产值；更长调用应结合实际 Worker 日志观察。
+Web 进程数在 `gunicorn.conf.py` 的 `workers` 中设置，当前为 2；统一入口仅在显式传入 `--workers N` 时覆盖。文件中的 `threads=2` 用于直接启动 Gunicorn；统一入口会传入自己的 `--threads` 值，默认也是 2。
 
-### 会话、队列与存储
+## 3. 创建和复用方案
 
-| 变量 | 默认值 / 用途 |
+1. 打开“方案适配”，上传已获准处理的 CSV/XLSX 和可选参考 DOCX。
+2. 选择数据工作表，填写必要的固定目录或补充要求，确认数据发送授权后执行识别。
+3. 核对字段含义，尤其是“主要正文”；按目录选择写入正文的字段及行筛选条件。
+4. 核对报告标题、起始章节、字体字号、行距和编号；执行“验证样例”，检查生成的 DOCX。
+5. 确认后保存。以后在“新建文档”选择此方案，不必每次上传模板。
+
+多条来源行可按同一目录合并为一个审核区块。字段“被识别”不等于“写入正文”：正文来源由目录中的字段选择决定；其他映射字段仍可能用于标题、筛选或模型上下文。状态策略只在有关字段及规则存在时生效。
+
+### 工作表、周期与表头
+
+| 项目 | 本次上传时如何处理 |
 |---|---|
-| `REPORT_SESSION_TTL` | **`2h`**；新审核会话及下载快照有效期，空值也使用默认；正整数加 `h/d/w` 或“小时/天/周” |
-| `WEEKLY_REPORT_SNAPSHOT_DIR` | 空，系统临时目录下 `weekly-report-agent-snapshots/`；沿用旧名兼容快照，可改为持久路径 |
-| `TASK_DB_PATH` | 空，项目 `var/tasks.sqlite3` |
-| `TASK_FILES_DIR` | 空，项目 `var/tasks/` |
-| `TASK_MAX_CONCURRENCY` | `2`，同配置后台 Worker 共享的任务并发上限，范围 1～16 |
-| `TASK_QUEUE_CAPACITY` | `100`，队列接纳容量 |
-| `REPORT_PROFILES_DIR` | 空，项目 `var/profiles/`，元数据为其同级 `profiles.sqlite3` |
-| `STATS_DB_PATH` | 空，项目 `var/stats.sqlite3` |
-| `REPORT_TIMEZONE` | `Asia/Shanghai`；统计及审核到期时间的显示时区 |
-| `STATS_HMAC_KEY` | 空，自动生成并保存 `.key`；显式配置至少 16 字节且所有进程一致 |
+| 工作表 | 可手动选择；旧默认名称不存在时回退到当前文件首个工作表，说明页/空页仍允许切换 |
+| 周次矩阵 | 从第二行识别“第N周”，从第一行识别月份；可手选周次，不选则使用最新有效周次 |
+| 普通明细表 | 使用方案确认的表头行数，不额外显示周次 |
+| 正文周期 | 正文映射指向周期列时，跟随所选周次；明确映射到非周期列时按其配置读取 |
+| 结构检查 | 保存了 `expected_headers` 时，普通明细表要求完整规范化表头与顺序一致；矩阵允许已识别周期列变化，固定业务字段仍检查 |
+| 其他规则 | 必填字段、目录筛选和状态策略继续执行，新项目不一定自动进入已有目录 |
 
-`TASK_MAX_CONCURRENCY` 控制同时执行几份任务，`LLM_MAX_CONCURRENCY` 控制一份报告内几批模型请求并行；提高并发不能缩短单次上游响应时间。Web 与 Worker 必须使用同一路径和配置。
+月份或周次列变化不必重建矩阵方案；固定字段名、布局等变化时应重新适配。显式选择不存在的工作表或周次会报错，不会静默读取另一列。
 
-将新审核会话延长至 24 小时：
+仓库 `data/` 中的方案 JSON 是规则导出，不是网页直接导入接口；Git 不包含 `var/` 方案库。新部署需按上述步骤创建方案，或迁移已有方案数据库及完整版本目录。
 
-```dotenv
-REPORT_SESSION_TTL=24h
-```
+## 4. 生成、审核与导出
 
-可设置 `24h`、`3d`、`1w` 或 `24小时`、`3天`、`1周`。未设置新变量时兼容旧的 `REPORT_SESSION_TTL_SECONDS` 正整数秒值；两者同时存在时新变量优先。
+1. 在“新建文档”上传数据，选择已保存方案、工作表及适用的周次。
+2. 选择 **原文保留** 或 **规范润色**。前者执行本地规范化；后者允许模型重分条和调整正文层级，可填写额外要求。
+3. 提交后等待任务完成。页面查询进度，关闭页面不等于取消任务；需要中止时使用取消按钮。
+4. 在审核工作区点击区块，联动核对来源行、当前内容和右侧文档；查看模型候选及 Diff。
+5. 关键事实冲突默认不自动采用候选，可核对告警后谨慎采用。人工编辑基于当前内容，确认修改前后 Diff 后生效，不走模型事实校验。
+6. 下载“当前 DOCX”。修改会产生新 revision，旧页面提交可能返回版本冲突，刷新后再操作。
 
-有效期从创建时计算，写入快照的 `expires_at`；刷新、编辑、下载或关闭页面均不会延长或暂停。配置变更只影响新快照，旧快照仍按原到期时间读取和清理。首页显示当前配置，审核页显示该会话实际到期时间。过期访问立即拒绝，物理文件在后续访问或创建会话时按需清理；停服时不会定时执行删除。临时目录也可能由操作系统清理，如需稳定保存到配置期限请使用持久路径。
+PDF 预览需服务器已有 LibreOffice 和相应字体；`LIBREOFFICE_PATH` 默认自动检测，`PDF_PREVIEW_TIMEOUT` 默认 45 秒。缺少它不影响 HTML 和 DOCX。HTML 不承诺与 Word 分页完全一致；最终排版请核对 Word 或 PDF。
 
-以下周期**互相独立**：审核会话使用上面的可配值；适配草稿固定两小时，新分析时清理；排队超过两小时不再执行，终态任务结束两小时后由 Worker 清理；永久方案与累计统计不自动过期。任务状态链接过期不等于仍有效的审核地址失效，应保存审核地址并及时下载。
-
-## 维护与备份
-
-| 数据 | 管理方式 |
-|---|---|
-| `var/profiles.sqlite3` 和 `var/profiles/<id>/<version>/` | 索引、规则和模板共同构成永久方案，必须一起备份 |
-| `var/tasks.sqlite3` 与 `var/tasks/` | 短期任务状态、候选事件、输入和模板；不要运行中清空 |
-| 快照及同级 `*-adaptations/` | 审核的 DOCX/PDF/来源副本及短期适配草稿，按上述周期清理 |
-| `var/stats.sqlite3`、`.key` | 匿名统计和去重密钥一起保留；删除会丢失统计或去重一致性 |
-| `*-wal`、`*-shm` | SQLite 自身管理，运行中不要手动删除 |
-| `var/logs/`、`var/run/` | 部署方式按需使用，不保证一定存在或持续更新 |
-| `outputs/` | CLI 或测速生成结果，由使用者决定保留 |
-
-`python scripts/manage_profiles.py` 提供查询、搜索、最近使用、详情、重命名和确认删除菜单。方案无账户隔离，服务器共享；删除需完整 ID，活跃任务引用会阻止删除。更新或删除方案不会改写已生成会话的冻结规则。备份方案时停止方案写入或持有文件锁；SQLite 使用 backup API，不仅复制可能未落盘的主库。不要把 Key、业务正文或运行数据加入 Git。
-
-## 排查
-
-- **一直排队**：Gunicorn 的 worker 是 Web 子进程；用 `pgrep -af 'sheetweave_agent.task_worker'` 确认独立任务进程，核对两端 Python、`.env`、路径、权限和并发容量。HTTP 202 仅表示已入队。
-- **模型慢**：比较排队耗时与执行耗时；检查批次大小、上游响应、重试和自动修正。可用 `scripts/benchmark_timing.py` 对合成数据计时，不发送真实业务数据。
-- **任务中断**：队列用租约识别故障，不自动重放可能计费的外部调用；刷新状态后核对结果。发布时可能跨快照/队列存储部分成功，先确认审核版本。
-- **版本冲突**：编辑、重生成、PDF 绑定 revision，过时请求返回 409；刷新后再操作，不覆盖新版本。
-- **PDF 不可用**：确认 LibreOffice 路径、转换权限、超时及字体；不会自动安装软件，不影响 DOCX 下载。
-- **会话过期**：查看审核页到期时间。修改 TTL 后需重新生成，不能恢复已过期文件；重新部署后保持存储路径一致。
-- **模块不存在**：确认环境、路径和 editable 安装指向新目录。实际入口为 `sheetweave_agent`，不要直接执行 `python src/web.py`。
-
-## 回归范围
-
-`tests/` 保留核心解析、规范化/语义分段、LLM 合约与事实保护、方案生命周期、队列、审核、Word 列表、文档安全/PDF 和服务/统计测试。删除旧流式页面、重复入口断言、历史菜单变体和依赖本地业务文件的测试；状态列完成规则等仍在使用的行为保留代表用例。所有模型调用使用 Mock，写入临时目录。运行 `python -m pytest`、`ruff check .`、`ruff format --check .`，实际结果以当前运行记录为准。
-
-
-## 公司网关超时诊断
-
-短请求成功只证明基础链路可用，推理型模型处理真实业务数据可能超过默认 60 秒。已在内部部署观察到模型持续返回推理而迟迟没有正文，提高 `LLM_TIMEOUT` 后能够完成生成；遇到类似情况，应根据实际模型耗时配置等待时间，参见上面的超时说明。其他部署仍需通过阶段日志区分网关排队、长生成和响应停滞，不能把所有超时都归因于同一原因。当前版本不自动重发超时或已收到响应头后中断的请求，避免上游仍在生成时重复计费/排队；HTTP 429/5xx 和部分连接错误仍按配置有限重试。`LLM_TIMEOUT` 是 urllib 的阻塞等待阈值，不是硬性的完整请求/任务总时限。
-
-Worker 终端或现有 systemd journal 会输出 JSON 诊断行。沿同一 `task_id`，查看：
-
-| 事件 / stage | 含义 |
-|---|---|
-| `worker_enter` | 任务被后台接手，区别于排队 |
-| `prepare_ir` | 表格、映射和 IR 准备耗时 |
-| `llm_plan` / `llm_batch_input` | 批次数、并发数、区块数、实际消息字符数及是否单块超限 |
-| `http_start` | 模型、实际请求体字节数、等待阈值、尝试次数与上限 |
-| `http_headers` | 已收到响应头及其耗时，随后开始读取完整非流式响应 |
-| `http_end` | 成败、HTTP 状态、响应字节数、耗时、异常类型及是否重试 |
-| `response_parse` / `fact_validation` | 模型内容结构解析与本地事实校验 |
-| `docx_render_validate` | DOCX 渲染和格式验证 |
-| `task_failure` / `task_result` | 失败类型及最终队列状态；`stage_end(task)` 只表示执行器已返回，成败以 `task_result.state` 为准 |
-
-方案辅助识别与可选自动修正有各自的请求组织方式，不受首次规范润色批次预算限制；排查时保持 `LLM_AUTO_CORRECT=false`。
-
-每条事件包含 UTC 时间；批次线程继承任务 ID，HTTP 事件关联 `batch`、`batches` 和 `blocks`。字符数用于比较输入规模，不冒充精确 token 数。日志不包含 Key、URL、请求头、Prompt、原始数据、模型输出或底层异常消息。
-
-- `http_end.stage=await_headers`：等待响应头期间失败，包括 DNS、连接、TLS、网关等待及模型首响应；不能仅凭它断言模型已经开始计算。
-- `stage=read_body`：已经收到响应头，读取正文失败或超时。
-- `stage=decode_response`：完整 HTTP 响应已读完，解析或响应封装有问题。
-- `cause_type=TimeoutError`：超时不自动重试；`status=401/403` 优先检查模型授权；`429/503` 优先检查网关容量。
-- `oversized=true`：单个合并审核区块或固定提示词已超过预算。调整方案分组/输入范围，或结合网关能力评估等待阈值，继续减小预算不会拆开该区块。
-
-`LLM_TIMEOUT` 应按真实模型耗时设置，不要求固定为 60 秒。需要进一步隔离问题时，可暂设 `LLM_MAX_RETRIES=0`、`LLM_MAX_BATCH_CHARS=6000`、`LLM_MAX_CONCURRENCY=1`，比较长请求、重复请求和并发竞争；这些仅是诊断起点，已稳定的部署无需照抄，也不保证适用于所有网关。每份报告可并发 1 批不代表全站只有 1 个上游请求：`TASK_MAX_CONCURRENCY` 仍限制并行任务数量。观察成功请求耗时和网关限制后，再逐项调整并发或等待阈值；不要同时修改全部参数后直接宣称根因已修复。
-
-现有测速脚本仅生成合成数据，可复用真实解析、LLM、DOCX 渲染/校验流程。先进行无需 API 的原文基线：
+CLI 也必须选择已保存方案。CLI 不自动读取项目 `.env`，需要时先加载可信配置或设置环境变量：
 
 ```bash
-python scripts/benchmark_timing.py --mode original --rows 7 --output /tmp/original-timing.json
+python -m sheetweave_agent --profile p_方案ID \
+  --input 数据.xlsx --sheet 数据页 --report-date 2026-10-29 \
+  --content-mode original --output outputs/报告.docx
+# 周次矩阵按需追加：--week 第4周
+# 模型模式需追加：--content-mode polish --allow-external
 ```
 
-在配置公司 API 的机器上，依次执行下列对比；每条命令都可能产生费用，上一项失败时先看日志，避免重复整组执行。`--allow-external` 明确允许将**合成数据**交给所配置的 API，脚本不会读取真实业务数据：
+## 5. 并发、有效期与存储
+
+| 参数 | 默认值 | 用法 |
+|---|---|---|
+| `TASK_MAX_CONCURRENCY` | `2` | 共享任务库下同时执行的任务上限，范围 1～16 |
+| `TASK_QUEUE_CAPACITY` | `100` | 待处理/执行任务接纳容量 |
+| `REPORT_SESSION_TTL` | `2h` | 新审核会话及下载快照有效期；支持 `24h`、`3d`、`1w` 及中文单位 |
+| `WEEKLY_REPORT_SNAPSHOT_DIR` | 系统临时目录下 `weekly-report-agent-snapshots/` | 多进程共享路径；需稳定保留时设为持久目录 |
+| `REPORT_PROFILES_DIR` | `var/profiles/` | 永久方案目录，数据库为同级 `profiles.sqlite3` |
+| `TASK_DB_PATH` / `TASK_FILES_DIR` | `var/tasks.sqlite3` / `var/tasks/` | 任务状态及输入附件 |
+| `STATS_DB_PATH` | `var/stats.sqlite3` | 聚合统计 |
+| `STATS_HMAC_KEY` | 自动生成 `.key` 文件 | 可显式设置至少16字节的稳定值，各进程保持一致 |
+| `REPORT_TIMEZONE` | `Asia/Shanghai` | 统计与会话到期时间显示时区 |
+
+`TASK_MAX_CONCURRENCY=2`、`LLM_MAX_CONCURRENCY=2` 时，两份多批次报告最多可同时产生4个首次润色请求；提高并发前确认网关容量。等待模型仍占后台任务名额，不占提交时的 Web 请求线程。
+
+会话从创建时计时，编辑和刷新不续期；修改 TTL 后重启，只影响新会话。未设置新变量时兼容旧 `REPORT_SESSION_TTL_SECONDS`。过期访问被拒绝，物理文件在后续访问/创建时按需清理；停服不会定时删除，但操作系统可能提前清理临时目录。
+
+方案永久保存。适配草稿、队列等待及终态任务记录有独立的两小时规则，不随审核 TTL 延长；任务状态过期不代表审核快照同时过期，生成后保存审核地址并及时下载。
+
+## 6. 管理与迁移
 
 ```bash
-# 少量区块
-python scripts/benchmark_timing.py --real --allow-external --env-file .env \
-  --rows 1 --max-concurrency 1 --output /tmp/llm-small.json
-# 同一份 12 行合成输入：较大批次、单并发
-python scripts/benchmark_timing.py --real --allow-external --env-file .env \
-  --rows 12 --max-batch-chars 12000 --max-concurrency 1 --output /tmp/llm-large.json
-# 同样输入：缩小批次、单并发；以输出的 llm_batches 为准
-python scripts/benchmark_timing.py --real --allow-external --env-file .env \
-  --rows 12 --max-batch-chars 4000 --max-concurrency 1 --output /tmp/llm-split.json
-# 仅前项稳定后比较双并发
-python scripts/benchmark_timing.py --real --allow-external --env-file .env \
-  --rows 12 --max-batch-chars 4000 --max-concurrency 2 --output /tmp/llm-parallel.json
+python scripts/manage_profiles.py
 ```
 
-以上 JSON 只保存计时、数量和错误类型，不保存输入输出正文。模型首次生成可能被事实校验回退；`success=true` 表示链路和 DOCX 校验完成，`validation_counts` 还需判断候选是否被采用。
-
-systemd 部署更新代码及 `.env` 后，使用现有服务重启，不修改服务架构：
+菜单支持查询、搜索、按未使用天数筛选、详情、重命名和删除；查看结果后按回车清屏返回，`0` 退出。删除需完整 ID 确认，活跃任务引用会阻止删除。
 
 ```bash
-sudo systemctl restart sheetweaveagent.service
-journalctl -u sheetweaveagent.service --since "10 minutes ago" -o cat
+python scripts/manage_profiles.py list --unused-days 90
+python scripts/manage_profiles.py show p_方案ID
+python scripts/manage_profiles.py rename p_方案ID "新名称"
+python scripts/manage_profiles.py delete p_方案ID
 ```
 
-提交一份获准处理的报告，确认 `worker_enter → prepare_ir → llm_plan → http_start/http_end → response_parse → fact_validation → docx_render_validate → task_result(state=succeeded)`；失败时保留同一任务的脱敏诊断行。上线验收应以部署机真实请求的实际结果为准，不能用短请求或本地模拟网关的成功代替。
+脚本默认读取项目 `.env`；可在子命令前指定 `--env-file /路径/配置.env` 或 `--no-env`。筛选不自动删除，重命名保留 ID 和历史版本。
+
+迁移方案需同时备份 `var/profiles.sqlite3` 和完整 `var/profiles/`；更新方案不改变已有会话冻结的规则。SQLite 用 backup API 或停服后完整备份，不只拷贝可能尚未落盘的主库。统计库和 `.key` 一起保留，运行中不要删除 `*-wal`、`*-shm`。`var/verification/` 为验证记录，`outputs/` 为按需输出，均不提交 Git。
+
+## 7. 常见问题与诊断
+
+| 问题 | 操作 |
+|---|---|
+| 一直排队 | 用 `pgrep -af 'sheetweave_agent.task_worker'` 确认后台进程；核对 Web/Worker 的环境与共享路径。Gunicorn Worker 不等于任务 Worker |
+| 模型生成慢 | 看等待阶段与实际模型推理耗时，按需调整 `LLM_TIMEOUT`，不要只改 Gunicorn 超时 |
+| `await_headers` 超时 | 尚未收到响应头，可能是网络、网关等待或非流式模型生成；不能仅凭它认定 token 超限 |
+| `read_body` 超时 | 已收到响应头，正文读取停滞；流式心跳不等于已经生成正文 |
+| `response_parse` 失败 | 已收到模型内容但结构不合约，区别于网络超时 |
+| 模块不存在 | 检查 Python 环境并在当前项目重新 `pip install -e .` |
+| 找不到表头/有效内容 | 核对工作表、周次、固定字段、目录筛选及状态策略 |
+| 版本冲突/会话过期 | 刷新获取最新版本；已过期快照需重新生成，改TTL不会恢复文件 |
+
+独立诊断工具默认不发请求；从实际 Worker 读取配置并核对模型名：
+
+```bash
+python scripts/diagnose_llm.py --worker-pid 实际PID --expect-model 实际模型名
+# 确认计划后，一次基础请求
+python scripts/diagnose_llm.py --worker-pid 实际PID --expect-model 实际模型名 \
+  --cases basic --max-requests 1 --execute
+```
+
+支持 `--cases report compact`、`--transport stream` 或 `both`。`both` 与三类测试一起使用时需显式 `--max-requests 6`。默认 socket 上限15秒、单次硬截止20秒、测试组预算60秒；生产等待调大后应对应调整 `--timeout`、`--deadline`、`--total-timeout`，当前每项上限180秒。真实文件还需 `--input`、`--profile` 和 `--allow-input-upload`。每次只测试所选生产批次，不代表整份报告已通过校验。
+
+测试可能产生API用量。工具不保存密钥、Prompt或响应正文；`reasoning_chars` 增长而 `content_chars=0` 表示观察到推理但无正文。客户端截止不保证上游停止生成，避免连续重复发起慢请求。更多参数见 `python scripts/diagnose_llm.py --help`。
+
+需要原文生成基线时：
+
+```bash
+python scripts/benchmark_timing.py --mode original --rows 7 --output /tmp/report-timing.json
+```
+
+使用既有 systemd 服务时，日志可用 `journalctl -u sheetweaveagent.service --since "10 minutes ago" -o cat` 查看，沿同一任务 ID 核对模型请求、校验和最终状态。不要分享 `.env`、请求正文或业务内容。
+
+## 使用范围与资料说明
+
+优先使用结构清晰的 CSV/XLSX，以及以标题、段落和列表为主的参考 DOCX。复杂表格、文本框等版式需要单独确认适配效果。HTML 用于审核内容结构，正式分页以 Word / PDF 为准。
+
+模型处理前确认数据发送权限；原文模式可在已有方案下本地运行。仓库新增跨场景资料用于功能验证，展示统计包含生成验证任务。

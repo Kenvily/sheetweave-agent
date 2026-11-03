@@ -57,6 +57,7 @@ class SectionRule:
     heading_path: tuple[str, ...] = ()
     heading_fields: tuple[str, ...] = ()
     match: dict = field(default_factory=dict)
+    unmatched_only: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -191,6 +192,7 @@ def validate_rule_preset(payload: dict[str, Any]) -> RulePreset:
             "heading_path",
             "heading_fields",
             "match",
+            "unmatched_only",
             "group_by",
             "llm_editable",
         }:
@@ -230,6 +232,9 @@ def validate_rule_preset(payload: dict[str, Any]) -> RulePreset:
             )
         ):
             raise RulePresetError("标题来源须与目录层级对应，且只能引用已映射字段。")
+        unmatched_only = section.get("unmatched_only", False)
+        if not isinstance(unmatched_only, bool):
+            raise RulePresetError("unmatched_only 必须是布尔值。")
         match = section.get("match", {})
         if not isinstance(match, dict) or set(match) - set(aliases):
             raise RulePresetError("来源匹配包含未知字段。")
@@ -246,12 +251,15 @@ def validate_rule_preset(payload: dict[str, Any]) -> RulePreset:
                 heading_path=path,
                 heading_fields=tuple(heading_fields),
                 match=match,
+                unmatched_only=unmatched_only,
             )
         )
     if any(item.heading_path for item in sections) and not all(
         item.heading_path for item in sections
     ):
         raise RulePresetError("自定义目录不能与旧章节规则混用。")
+    if sum(section.unmatched_only for section in sections) > 1:
+        raise RulePresetError("只能设置一个接纳未匹配行的目录。")
     section_ids = [section.id for section in sections]
     if len(set(section_ids)) != len(section_ids):
         raise RulePresetError("章节 id 不能重复。")

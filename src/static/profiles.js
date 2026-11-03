@@ -72,7 +72,7 @@
   function makeGroup(section) {
     return { headingFields:(section.heading_fields || []).map(key=>key?originalColumn(key):''), path:[...(section.heading_path?.length ? section.heading_path : [section.title])],
       sources:new Set((section.source_fields?.length ? section.source_fields : [section.source_field]).map(key=>key==='progress'?(originalColumn('content') || originalColumn('progress') || primaryWeek):originalColumn(key)).filter(Boolean)),
-      match:structuredClone(section.match || {})};
+      unmatchedOnly:Boolean(section.unmatched_only),match:structuredClone(section.match || {})};
   }
   base.sections.forEach(section=>groups.push(makeGroup(section)));
   function renderGroups() {
@@ -103,6 +103,11 @@
         path.append(field(headingLabels[level],controls));
       }
       box.append(path);
+      const fallback=input(`目录 ${index+1} 接纳未匹配行`,group.unmatchedOnly,'checkbox');
+      fallback.addEventListener('change',()=>{group.unmatchedOnly=fallback.checked;updateSave();});
+      const fallbackLabel=document.createElement('label');
+      fallbackLabel.append(fallback,document.createTextNode('接纳其他目录未覆盖的行（包括以后新增的项目）'));
+      box.append(fallbackLabel);
       const sourceLabel=document.createElement('p'); sourceLabel.textContent='写入此目录正文的字段（可多选）'; box.append(sourceLabel);
       const sources=document.createElement('div'); sources.className='source-options';
       const choices=Object.keys(assigned).filter(name=>assigned[name]!=='project');
@@ -224,6 +229,7 @@
     const fields=Object.values(assigned);
     if(new Set(fields).size!==fields.length) throw Error('每个语义用途只能选择一列；其他正文列请选择其他内容，再勾选写入正文。');
     rule.input.column_aliases=Object.fromEntries(Object.entries(assigned).map(([column,key])=>[key,[column]]));
+    if(groups.filter(group=>group.unmatchedOnly).length>1)throw Error('只能设置一个接纳未匹配行的目录。');
     rule.sections=groups.map((group,index)=>{
       const path=group.path.map((value,level)=>(group.headingFields[level] || value).trim());while(path.length&&!path.at(-1))path.pop();
       const headingFields=path.map((_,level)=>{
@@ -239,7 +245,7 @@
       if(!sourceFields.length)throw Error(`请选择目录 ${index+1} 要整合的内容。`);
       const match={};for(const [key,values] of Object.entries(group.match)){if(fields.includes(key)&&values.length)match[key]=values;}
       return {id:`section_${index+1}`,title:path.at(-1),source_field:sourceFields[0],source_fields:sourceFields,
-        heading_path:path,heading_fields:headingFields,match,group_by:'section',llm_editable:sourceFields.some(key=>!['project','detail','status','owner'].includes(key))};
+        heading_path:path,heading_fields:headingFields,match,unmatched_only:Boolean(group.unmatchedOnly),group_by:'section',llm_editable:sourceFields.some(key=>!['project','detail','status','owner'].includes(key))};
     });
     if(statusChecks.length)rule.input.status_policy={known:statusChecks.map(item=>item.value),include:statusChecks.filter(item=>item.check.checked).map(item=>item.value),unknown:'keep'};
     else delete rule.input.status_policy;
