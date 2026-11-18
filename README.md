@@ -1,14 +1,26 @@
-<h1><img src="src/static/sheetweave-mark.svg" alt="" width="40" height="40" align="absmiddle"> SheetWeaveAgent</h1>
+<h1 align="center">
+  <img src="src/static/sheetweave-mark.svg" alt="" width="40" height="40" align="absmiddle">
+  SheetWeaveAgent
+</h1>
 
-### 让业务数据，成为可以交付的正式文档。
+<h3 align="center">让业务数据，成为可以交付的正式文档。</h3>
 
-**Excel 里的业务记录，Word 里的企业规范，一条可审核的生成流程。**
+<p align="center">
+  <strong>Excel 里的业务记录，Word 里的企业规范，一条可审核的生成流程。</strong>
+</p>
+
+<p align="center">
+  <code>Python 3.11+</code> · <code>Flask</code> · <code>SQLite 任务队列</code> · <code>OpenAI-compatible LLM</code> · <code>OOXML</code>
+</p>
+
+<p align="center">
+  <a href="assets/showcase/SheetWeaveAgent-项目展示.pdf">📽️ 项目展示</a> ·
+  <a href="assets/showcase/SheetWeaveAgent-完整页面存档.pdf">🖥️ 完整页面与成果</a> ·
+  <a href="docs/operations.md">🚀 使用指南</a> ·
+  <a href="docs/project-design.md">🧠 架构与设计</a>
+</p>
 
 SheetWeaveAgent 面向需要反复编写正式报告的团队，将表格解析、模型整理、事实校验与企业模板排版串成完整工作流。从部门进展到项目交付，从模型评估到整改跟踪，把时间留给判断与决策，把重复整理交给工具。
-
-**Python 3.11+ · Flask · SQLite 任务队列 · OpenAI-compatible LLM · OOXML**
-
-[📽️ 项目展示](assets/showcase/SheetWeaveAgent-项目展示.pdf) · [🖥️ 完整页面与成果](assets/showcase/SheetWeaveAgent-完整页面存档.pdf) · [🚀 使用指南](docs/operations.md) · [🧠 架构与设计](docs/project-design.md)
 
 ## ⏱️ 从 20 分钟，到 2 分钟内
 
@@ -27,7 +39,7 @@ SheetWeaveAgent 面向需要反复编写正式报告的团队，将表格解析�
 | 📊 模型效果评估 | 实验记录、效果指标、资源数据 | 模型评估报告 |
 | 🔎 问题整改跟踪 | 问题清单、整改措施、验证记录 | 整改跟踪报告 |
 
-场景变化，复用同一套“字段 → 目录 → 正文 → 格式”的方案机制。[data/](data/) 提供分类输入、方案与输出资料，便于直接查看不同场景的组织方式。
+场景变化，复用同一套“字段 → 目录 → 正文 → 格式”的方案机制。通过[项目展示](assets/showcase/SheetWeaveAgent-项目展示.pdf)查看关键界面与文档交付流程。
 
 ## ✨ 从“生成一段文字”到“交付一份文档”
 
