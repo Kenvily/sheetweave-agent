@@ -1,4 +1,5 @@
 <h1><img src="../src/static/sheetweave-mark.svg" alt="" width="40" height="40" align="absmiddle"> SheetWeaveAgent Architecture and Design </h1>
+
 [简体中文](project-design.md) · **English** · [Project overview](../README.en.md) · [User guide](operations.en.md)
 
 ## 1. From records to deliverables
