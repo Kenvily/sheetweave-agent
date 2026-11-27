@@ -1,4 +1,4 @@
-# SheetWeaveAgent User Guide
+<h1><img src="../src/static/sheetweave-mark.svg" alt="" width="40" height="40" align="absmiddle"> SheetWeaveAgent User Guide </h1>
 
 [简体中文](operations.md) · **English** · [Project overview](../README.en.md) · [Architecture](project-design.en.md)
 
