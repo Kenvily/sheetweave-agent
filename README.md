@@ -9,6 +9,8 @@
   <strong>Excel 里的业务记录，Word 里的企业规范，一条可审核的生成流程。</strong>
 </p>
 
+<p align="center"><strong>简体中文</strong> · <a href="README.en.md">English</a></p>
+
 <p align="center">
   <code>Python 3.11+</code> · <code>Flask</code> · <code>SQLite 任务队列</code> · <code>OpenAI-compatible LLM</code> · <code>OOXML</code>
 </p>

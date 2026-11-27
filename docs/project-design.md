@@ -1,5 +1,7 @@
 <h1><img src="../src/static/sheetweave-mark.svg" alt="" width="40" height="40" align="absmiddle"> SheetWeaveAgent 架构与设计</h1>
 
+**简体中文** · [English](project-design.en.md)
+
 ### 从结构化业务数据，到可审核的文档交付。
 
 本文解释业务建模、实现原理与工程取舍。项目入口及价值概览见 [README](../README.md)，运行步骤与配置见 [使用指南](operations.md)。
