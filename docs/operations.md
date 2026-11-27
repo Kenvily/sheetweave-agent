@@ -1,5 +1,7 @@
 <h1><img src="../src/static/sheetweave-mark.svg" alt="" width="40" height="40" align="absmiddle"> SheetWeaveAgent 使用指南</h1>
 
+**简体中文** · [English](operations.en.md)
+
 从首次启动到日常交付，按这份指南完成配置与使用。
 
 **首次使用：安装启动 → 配置模型 → 创建方案 → 生成与审核。** 已有方案时，直接上传本期数据即可开始。
